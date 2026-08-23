@@ -1,5 +1,5 @@
 /**
- * 云端探针测试脚本 (probe-test.js)
+ * 云端探针测试脚本 (probe-test.js) - 有效 Payload 版本
  * 
  * 功能：验证 Cloudflare Worker 的可用性和 CORS 配置
  * 目标：https://vex-proxy.linkelo666.workers.dev/
@@ -13,10 +13,10 @@
 
 const WORKER_URL = 'https://vex-proxy.linkelo666.workers.dev/';
 
-// 使用真实的 VEX 比赛 URL 和 Mock matchIds
+// 使用真实的 VEX 比赛 URL 和 matchIds
 const TEST_PAYLOAD = {
-  targetUrl: 'https://events.vex.com/zh-CN/robot-competitions/vex-iq-competition/RE-VIQRC-26-5111.html',
-  matchIds: ['TeamWork #1', 'TeamWork #2', 'TeamWork #3']
+  targetUrl: 'https://events.vex.com/zh-CN/robot-competitions/vex-iq-competition?country_id=49',
+  matchIds: ['TeamWork #2', 'Match #1-1']
 };
 
 async function runProbeTest() {
@@ -58,9 +58,10 @@ async function runProbeTest() {
   }
   
   // --------------------------------------------------------
-  // 测试 2: POST 请求 - 正常数据
+  // 测试 2: POST 请求 - 有效 Payload
   // --------------------------------------------------------
-  console.log('🔬 [ProbeTest] --- 测试 2: POST 请求 - 正常数据 ---');
+  console.log('🔬 [ProbeTest] --- 测试 2: POST 请求 - 有效 Payload ---');
+  console.log(`🔬 [ProbeTest] Payload: ${JSON.stringify(TEST_PAYLOAD, null, 2)}`);
   try {
     const postResponse = await fetch(WORKER_URL, {
       method: 'POST',
@@ -88,14 +89,31 @@ async function runProbeTest() {
       // 断言：返回数据必须是数组
       if (Array.isArray(responseData)) {
         console.log(`✅ [ProbeTest] PASS: 返回数据是数组，包含 ${responseData.length} 条记录`);
+        
+        // 检查每条记录的结构
+        if (responseData.length > 0) {
+          const firstRecord = responseData[0];
+          console.log(`🔬 [ProbeTest] 第一条记录结构: ${JSON.stringify(firstRecord, null, 2)}`);
+          
+          // 验证必要字段
+          const requiredFields = ['matchId', 'redTeam', 'redScore', 'blueTeam', 'blueScore'];
+          const missingFields = requiredFields.filter(field => !(field in firstRecord));
+          
+          if (missingFields.length === 0) {
+            console.log(`✅ [ProbeTest] PASS: 记录结构完整，包含所有必要字段`);
+          } else {
+            console.log(`❌ [ProbeTest] FAIL: 缺少字段: ${missingFields.join(', ')}`);
+          }
+        }
       } else if (responseData.error) {
         console.log(`⚠️ [ProbeTest] WARN: 返回错误: ${responseData.error}`);
+        console.log(`🔬 [ProbeTest] 错误详情: ${JSON.stringify(responseData, null, 2)}`);
       } else {
         console.log(`❌ [ProbeTest] FAIL: 返回数据不是数组`);
       }
     } catch (e) {
       console.log(`❌ [ProbeTest] JSON 解析失败: ${e.message}`);
-      console.log(`🔬 [ProbeTest] 原始响应: ${responseText.substring(0, 500)}`);
+      console.log(`🔬 [ProbeTest] 原始响应: ${responseText.substring(0, 1000)}`);
     }
     console.log('');
   } catch (error) {
@@ -104,7 +122,7 @@ async function runProbeTest() {
   }
   
   // --------------------------------------------------------
-  // 测试 3: POST 请求 - 无效 URL
+  // 测试 3: POST 请求 - 无效 URL (验证错误处理)
   // --------------------------------------------------------
   console.log('🔬 [ProbeTest] --- 测试 3: POST 请求 - 无效 URL ---');
   try {
@@ -143,7 +161,7 @@ async function runProbeTest() {
   }
   
   // --------------------------------------------------------
-  // 测试 4: POST 请求 - 缺少参数
+  // 测试 4: POST 请求 - 缺少参数 (验证参数校验)
   // --------------------------------------------------------
   console.log('🔬 [ProbeTest] --- 测试 4: POST 请求 - 缺少参数 ---');
   try {
