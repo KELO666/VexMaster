@@ -748,27 +748,45 @@
             console.log('[SyncData] 正在发送请求到 Worker...');
             
             try {
-                const response = await fetch(WORKER_URL, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        targetUrl: targetUrl,
-                        matchIds: matchIds
-                    })
-                });
+                // 【Mock 数据模式】用于本地测试，跳过真实网络请求
+                const USE_MOCK_DATA = true;
+                let scoreDataList;
+                
+                if (USE_MOCK_DATA) {
+                    // 使用本地解析的 Mock 数据
+                    console.log('[SyncData] 使用 Mock 数据模式');
+                    scoreDataList = [
+                        { matchId: 'TeamWork #2', redTeam: '1268A', redScore: '233', blueTeam: '1268K', blueScore: '233' },
+                        { matchId: 'TeamWork #3', redTeam: '80077D', redScore: '194', blueTeam: '80077C', blueScore: '194' },
+                        { matchId: 'TeamWork #4', redTeam: '18185A', redScore: '186', blueTeam: '1266Y', blueScore: '186' },
+                        { matchId: 'TeamWork #5', redTeam: '80077A', redScore: '0', blueTeam: '20868C', blueScore: '104' },
+                        { matchId: 'TeamWork #6', redTeam: '1266A', redScore: '214', blueTeam: '88566G', blueScore: '214' }
+                    ];
+                } else {
+                    // 真实网络请求
+                    const response = await fetch(WORKER_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            targetUrl: targetUrl,
+                            matchIds: matchIds
+                        })
+                    });
 
-                // 3. 处理响应
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    console.error('[SyncData] Worker 返回错误:', errorData);
-                    alert('获取比分失败：' + (errorData.message || errorData.error));
-                    return;
+                    // 3. 处理响应
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        console.error('[SyncData] Worker 返回错误:', errorData);
+                        alert('获取比分失败：' + (errorData.message || errorData.error));
+                        return;
+                    }
+
+                    scoreDataList = await response.json();
                 }
-
-                const scoreDataList = await response.json();
-                console.log('[SyncData] Worker 返回数据:', scoreDataList);
+                
+                console.log('[SyncData] 获取到数据:', scoreDataList);
                 console.log('[SyncData] 解析到', scoreDataList.length, '条比分数据');
 
                 // 4. 核心映射逻辑：将比分数据匹配到对应的队伍

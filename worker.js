@@ -264,12 +264,13 @@ async function parseWithHTMLRewriter(response, matchIds) {
         console.log(`[Worker] 进入 <td> 标签，class: "${classAttr}"`);
         
         // 根据 class 设置捕获目标
+        // 【关键修复】使用 includes() 容错匹配，处理 border-team 等复合 class
         if (classAttr.includes('match-col')) {
           // 比赛编号和时间列
           captureTarget = 'matchId';
           console.log('[Worker] 设置捕获目标: matchId');
         } else if (classAttr.includes('red-team')) {
-          // 红方列
+          // 红方列 - 使用 includes() 容错匹配
           redCount++;
           if (redCount === 1) {
             captureTarget = 'redTeam';
@@ -279,7 +280,7 @@ async function parseWithHTMLRewriter(response, matchIds) {
             console.log('[Worker] 设置捕获目标: redScore (第2次)');
           }
         } else if (classAttr.includes('blue-team')) {
-          // 蓝方列
+          // 蓝方列 - 使用 includes() 容错匹配，处理 "blue-team border-team" 等复合 class
           blueCount++;
           if (blueCount === 1) {
             captureTarget = 'blueTeam';
