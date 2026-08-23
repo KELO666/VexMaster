@@ -1,21 +1,27 @@
 /**
- * VEX 赛事比分代理 Worker (POST 版本)
+ * VEX 赛事比分代理 Worker (HTMLRewriter 状态机版本)
  * 
  * 功能：接收前端 POST 请求，抓取指定比赛的比分数据
  * 环境：Cloudflare Worker (V8 Isolate)
+ * 
+ * 架构说明：
+ * - 使用 HTMLRewriter 流式解析，无 DOM 树
+ * - 通过状态机跟踪当前解析位置
+ * - 监听 tr/td 标签的进入事件
+ * - 根据 class 属性判断红蓝方数据
  * 
  * 请求格式：
  * POST /
  * Content-Type: application/json
  * {
  *   "targetUrl": "https://events.vex.com/...",
- *   "matchIds": ["Q19", "Q20", "Q21"]
+ *   "matchIds": ["TeamWork #2", "TeamWork #3"]
  * }
  * 
  * 返回格式：
  * [
- *   {"matchId": "Q19", "redScore": 236, "blueScore": 100},
- *   {"matchId": "Q20", "redScore": 150, "blueScore": 180}
+ *   {"matchId": "TeamWork #2", "redTeam": "1268A", "redScore": "233", "blueTeam": "1268K", "blueScore": "233"},
+ *   {"matchId": "TeamWork #3", "redTeam": "80077D", "redScore": "194", "blueTeam": "80077C", "blueScore": "194"}
  * ]
  */
 
@@ -69,7 +75,7 @@ export default {
         message: '请提供有效的 JSON 数据',
         example: {
           targetUrl: 'https://events.vex.com/...',
-          matchIds: ['Q19', 'Q20']
+          matchIds: ['TeamWork #2', 'TeamWork #3']
         }
       });
     }
@@ -122,19 +128,16 @@ export default {
       }
 
       // --------------------------------------------------------
-      // 6. 获取 HTML 内容
+      // 6. 使用 HTMLRewriter 流式解析
       // --------------------------------------------------------
-      const html = await targetResponse.text();
-      console.log(`[Worker] 获取 HTML 成功，长度: ${html.length}`);
-
-      // --------------------------------------------------------
-      // 7. 解析比分数据
-      // --------------------------------------------------------
-      const results = parseScoresFromHtml(html, matchIds);
+      console.log(`[Worker] 开始 HTMLRewriter 流式解析...`);
+      
+      const results = await parseWithHTMLRewriter(targetResponse, matchIds);
+      
       console.log(`[Worker] 解析完成，有效数据: ${results.length} 条`);
 
       // --------------------------------------------------------
-      // 8. 返回结果
+      // 7. 返回结果
       // --------------------------------------------------------
       return jsonResponse(200, results);
 
@@ -149,137 +152,246 @@ export default {
 };
 
 // ============================================================
-// 核心解析函数 - 从 HTML 中提取指定比赛的比分
+// HTMLRewriter 状态机解析器
 // 
-// 【输入】
-// - html: 目标页面的完整 HTML
-// - matchIds: 要提取的比赛编号数组，如 ["Q19", "Q20"]
+// 【核心设计】
+// 由于 HTMLRewriter 是流式解析，没有 DOM 树，无法使用 querySelectorAll
+// 我们通过状态机跟踪当前解析位置：
 // 
-// 【输出】
-// - 包含比分数据的数组，格式：
-//   [{"matchId": "Q19", "redScore": 236, "blueScore": 100}]
-// 
-// 【HTML 结构假设】
-// events.vex.com 的比赛结果页面通常结构如下：
-// 
-// <table>
-//   <tr>
-//     <td>Q19</td>           ← 比赛编号
-//     <td>Field A</td>       ← 场地
-//     <td>10:30 AM</td>      ← 时间
-//     <td>53168C 12345A</td> ← 红方队伍
-//     <td>236</td>           ← 红方得分
-//     <td>67890B 11111D</td> ← 蓝方队伍
-//     <td>100</td>           ← 蓝方得分
-//   </tr>
-// </table>
-// 
-// 【解析策略】
-// 1. 定位包含目标比赛编号的行
-// 2. 提取该行中的得分数据
-// 3. 返回结构化结果
+// 状态转移：
+// tr 进入 → 初始化 currentMatch
+//   ↓
+// td 进入 → 检查 class 属性
+//   ├─ match-col → 设置捕获目标为 matchId
+//   ├─ red-team → redCount++，根据计数捕获 team 或 score
+//   └─ blue-team → blueCount++，根据计数捕获 team 或 score
+//   ↓
+// td 文本 → 根据捕获目标存储数据
+//   ↓
+// tr 退出 → 保存 currentMatch 到 results
 // ============================================================
-function parseScoresFromHtml(html, matchIds) {
+async function parseWithHTMLRewriter(response, matchIds) {
+  // 结果数组
   const results = [];
+  
+  // 当前正在解析的比赛对象
+  let currentMatch = null;
+  
+  // 红蓝方计数器
+  let redCount = 0;
+  let blueCount = 0;
+  
+  // 当前文本捕获目标
+  let captureTarget = null; // 'matchId' | 'redTeam' | 'redScore' | 'blueTeam' | 'blueScore'
+  
+  // 文本缓冲区
+  let textBuffer = '';
 
   // --------------------------------------------------------
-  // 遍历每个要查询的比赛编号
+  // 创建 HTMLRewriter 实例
+  // 
+  // 【监听器设计】
+  // - tr: 进入时初始化比赛对象，退出时保存数据
+  // - td: 进入时根据 class 设置捕获目标，文本时捕获数据
   // --------------------------------------------------------
-  for (const matchId of matchIds) {
-    console.log(`[Worker] 正在解析比赛: ${matchId}`);
-
+  const rewriter = new HTMLRewriter()
     // --------------------------------------------------------
-    // 正则匹配：定位包含该比赛编号的表格行
+    // 监听 tr 标签 - 每场比赛一行
     // 
-    // 【正则说明】
-    // - <tr[^>]*> : 匹配表格行开始标签
-    // - [\s\S]*? : 非贪婪匹配任意内容（包括换行符）
-    // - ${matchId} : 目标比赛编号
-    // - [\s\S]*?</tr> : 匹配到行结束标签
-    // - g: 全局匹配, i: 忽略大小写
+    // 【逻辑】
+    // - 进入 tr 时：初始化 currentMatch，重置计数器
+    // - 退出 tr 时：如果 currentMatch 有效，保存到 results
     // --------------------------------------------------------
-    const rowRegex = new RegExp(
-      `<tr[^>]*>[\\s\\S]*?${escapeRegex(matchId)}[\\s\\S]*?</tr>`,
-      'gi'
-    );
-
-    const match = html.match(rowRegex);
-
-    if (match && match.length > 0) {
-      const rowHtml = match[0];
-      console.log(`[Worker] 找到比赛 ${matchId} 的行，长度: ${rowHtml.length}`);
-
-      // --------------------------------------------------------
-      // 提取得分数据
-      // 
-      // 【策略】
-      // 在表格行中，得分通常是纯数字，且位于队伍编号之后
-      // 我们提取所有数字，然后根据位置判断红蓝方得分
-      // --------------------------------------------------------
-      const scoreData = extractScoresFromRow(rowHtml, matchId);
+    .on('tr', {
+      // 进入 <tr> 标签时触发
+      element(element) {
+        // 初始化当前比赛对象
+        currentMatch = {
+          matchId: '',
+          redTeam: '',
+          redScore: '',
+          blueTeam: '',
+          blueScore: ''
+        };
+        
+        // 重置计数器
+        redCount = 0;
+        blueCount = 0;
+        
+        // 重置捕获目标
+        captureTarget = null;
+        
+        // 清空文本缓冲区
+        textBuffer = '';
+        
+        console.log('[Worker] 进入 <tr> 标签，初始化比赛对象');
+      },
       
-      if (scoreData) {
-        results.push(scoreData);
-        console.log(`[Worker] 比赛 ${matchId}: 红方=${scoreData.redScore}, 蓝方=${scoreData.blueScore}`);
-      } else {
-        console.log(`[Worker] 比赛 ${matchId}: 未能提取到有效得分`);
+      // 退出 <tr> 标签时触发
+      end(element) {
+        // 如果 currentMatch 有效且 matchId 不为空，保存到结果
+        if (currentMatch && currentMatch.matchId) {
+          // 检查是否在目标列表中
+          const isTarget = matchIds.some(id => 
+            currentMatch.matchId.includes(id) || id.includes(currentMatch.matchId)
+          );
+          
+          if (isTarget) {
+            console.log(`[Worker] 找到目标比赛: ${currentMatch.matchId}`);
+            results.push({...currentMatch});
+          }
+        }
+        
+        // 重置 currentMatch
+        currentMatch = null;
+        
+        console.log('[Worker] 退出 <tr> 标签');
       }
-    } else {
-      console.log(`[Worker] 比赛 ${matchId}: 未找到匹配的行`);
-    }
-  }
+    })
+    // --------------------------------------------------------
+    // 监听 td 标签 - 每个单元格
+    // 
+    // 【逻辑】
+    // - 进入 td 时：检查 class 属性，设置捕获目标
+    // - 文本时：根据捕获目标存储数据
+    // --------------------------------------------------------
+    .on('td', {
+      // 进入 <td> 标签时触发
+      element(element) {
+        // 获取 class 属性
+        const classAttr = element.getAttribute('class') || '';
+        
+        console.log(`[Worker] 进入 <td> 标签，class: "${classAttr}"`);
+        
+        // 根据 class 设置捕获目标
+        if (classAttr.includes('match-col')) {
+          // 比赛编号和时间列
+          captureTarget = 'matchId';
+          console.log('[Worker] 设置捕获目标: matchId');
+        } else if (classAttr.includes('red-team')) {
+          // 红方列
+          redCount++;
+          if (redCount === 1) {
+            captureTarget = 'redTeam';
+            console.log('[Worker] 设置捕获目标: redTeam (第1次)');
+          } else if (redCount === 2) {
+            captureTarget = 'redScore';
+            console.log('[Worker] 设置捕获目标: redScore (第2次)');
+          }
+        } else if (classAttr.includes('blue-team')) {
+          // 蓝方列
+          blueCount++;
+          if (blueCount === 1) {
+            captureTarget = 'blueTeam';
+            console.log('[Worker] 设置捕获目标: blueTeam (第1次)');
+          } else if (blueCount === 2) {
+            captureTarget = 'blueScore';
+            console.log('[Worker] 设置捕获目标: blueScore (第2次)');
+          }
+        } else {
+          // 其他列，不捕获
+          captureTarget = null;
+        }
+        
+        // 清空文本缓冲区
+        textBuffer = '';
+      },
+      
+      // 文本节点时触发
+      text(text) {
+        // 如果有捕获目标，累加文本
+        if (captureTarget) {
+          textBuffer += text.text;
+          console.log(`[Worker] 捕获文本: "${text.text}" -> ${captureTarget}`);
+        }
+      },
+      
+      // 退出 <td> 标签时触发
+      end(element) {
+        // 如果有捕获目标且 currentMatch 存在，存储数据
+        if (captureTarget && currentMatch) {
+          // 清洗文本：去除首尾空白
+          const cleanText = textBuffer.trim();
+          
+          // 根据捕获目标存储
+          switch (captureTarget) {
+            case 'matchId':
+              // 清洗比赛编号：只保留 TeamWork #数字 或 Match #数字-数字
+              currentMatch.matchId = cleanMatchId(cleanText);
+              console.log(`[Worker] 存储 matchId: "${currentMatch.matchId}"`);
+              break;
+            case 'redTeam':
+              currentMatch.redTeam = cleanText;
+              console.log(`[Worker] 存储 redTeam: "${currentMatch.redTeam}"`);
+              break;
+            case 'redScore':
+              currentMatch.redScore = cleanText;
+              console.log(`[Worker] 存储 redScore: "${currentMatch.redScore}"`);
+              break;
+            case 'blueTeam':
+              currentMatch.blueTeam = cleanText;
+              console.log(`[Worker] 存储 blueTeam: "${currentMatch.blueTeam}"`);
+              break;
+            case 'blueScore':
+              currentMatch.blueScore = cleanText;
+              console.log(`[Worker] 存储 blueScore: "${currentMatch.blueScore}"`);
+              break;
+          }
+        }
+        
+        // 重置捕获目标和缓冲区
+        captureTarget = null;
+        textBuffer = '';
+      }
+    });
 
+  // --------------------------------------------------------
+  // 执行 HTMLRewriter 流式解析
+  // --------------------------------------------------------
+  await rewriter.transform(response).text();
+
+  // --------------------------------------------------------
+  // 返回结果
+  // --------------------------------------------------------
+  console.log(`[Worker] 解析完成，共找到 ${results.length} 场比赛`);
   return results;
 }
 
 // ============================================================
-// 从单行 HTML 中提取比分数据
+// 数据清洗函数 - 清洗比赛编号
+// 
+// 【输入】
+// - 原始文本：如 "TeamWork #2 \n Aug 15th at 10:01 AM"
+// 
+// 【输出】
+// - 清洗后：如 "TeamWork #2"
+// 
+// 【规则】
+// - 资格赛：保留 "TeamWork #数字"
+// - 淘汰赛：保留 "Match #数字-数字"
 // ============================================================
-function extractScoresFromRow(rowHtml, matchId) {
-  // --------------------------------------------------------
-  // 提取所有数字（得分）
-  // 
-  // 【正则说明】
-  // - \b : 单词边界，确保匹配完整的数字
-  // - (\d+) : 捕获一个或多个数字
-  // - \b : 单词边界
-  // --------------------------------------------------------
-  const scoreRegex = /\b(\d{1,4})\b/g;
-  const allNumbers = [...rowHtml.matchAll(scoreRegex)]
-    .map(m => parseInt(m[1]))
-    .filter(n => n >= 0 && n <= 9999);  // 过滤掉不合理的数字
-
-  console.log(`[Worker] 提取到的数字: ${JSON.stringify(allNumbers)}`);
-
-  // --------------------------------------------------------
-  // 判断红蓝方得分
-  // 
-  // 【策略】
-  // 在 VEX 比赛中，得分通常在 0-500 范围内
-  // 前两个合理的数字通常是红方和蓝方得分
-  // 
-  // 【注意】
-  // 这里假设数字的顺序是：红方得分、蓝方得分
-  // 如果实际页面结构不同，需要调整
-  // --------------------------------------------------------
-  const validScores = allNumbers.filter(n => n >= 0 && n <= 999);
-
-  if (validScores.length >= 2) {
-    return {
-      matchId: matchId.toUpperCase(),
-      redScore: validScores[0],
-      blueScore: validScores[1]
-    };
+function cleanMatchId(rawText) {
+  // 去除首尾空白
+  let text = rawText.trim();
+  
+  // 替换换行符为空格
+  text = text.replace(/\n/g, ' ');
+  
+  // 【规则1】匹配资格赛格式：TeamWork #数字
+  const teamWorkMatch = text.match(/TeamWork\s*#\d+/i);
+  if (teamWorkMatch) {
+    return teamWorkMatch[0].trim();
   }
-
-  return null;
-}
-
-// ============================================================
-// 辅助函数：转义正则表达式特殊字符
-// ============================================================
-function escapeRegex(string) {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  
+  // 【规则2】匹配淘汰赛格式：Match #数字-数字
+  const matchMatch = text.match(/Match\s*#\d+-\d+/i);
+  if (matchMatch) {
+    return matchMatch[0].trim();
+  }
+  
+  // 【规则3】如果都不匹配，返回原始文本（可能需要进一步处理）
+  console.log(`[Worker] 警告：无法清洗比赛编号: "${text}"`);
+  return text;
 }
 
 // ============================================================
