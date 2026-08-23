@@ -170,3 +170,127 @@ dev      → 当前开发分支（v1.1-dev）
 **最后更新**: 2026-08-23 16:02:00  
 **维护者**: Kelo  
 **状态**: 开发中
+
+---
+
+## 📌 DOM 结构探路结果
+
+### 🕒 [2026-08-23 16:18:00]
+
+🎯 **[Target]**: 
+使用无头浏览器成功获取 VEX 成果页真实 DOM 结构
+
+🛠️ **[Modifications]**:
+- `scrape-vex-system-chrome.js`: 创建使用系统 Chrome 的 Puppeteer 脚本
+- `vex-page-chrome.html`: 保存完整 HTML（73.78 KB）
+
+🐛 **[Sandbox Result/Error]**: 
+✅ **成功！** 绕过 Cloudflare 保护，找到 6 个表格
+
+💡 **[Next Step]**: 
+根据 DOM 结构更新 Worker 解析逻辑
+
+---
+
+## 🔍 核心 DOM 结构分析
+
+### 1. 比赛结果表格 (关键!)
+
+**选择器**: `table.match-results.viqc-match-results`
+
+**表头结构 (th)**:
+```
+| Match | Red Team | Score | Blue Team | Score |
+```
+
+**数据行结构 (tr)**:
+```html
+<tr>
+  <td class="match-col">
+    TeamWork #2 <br> Aug 15th at 10:01 AM
+  </td>
+  <td class="red-team">1268A</td>
+  <td class="red-team">233</td>
+  <td class="blue-team border-team">1268K</td>
+  <td class="blue-team">233</td>
+</tr>
+```
+
+**关键 class**:
+- `.match-col`: 比赛编号和时间
+- `.red-team`: 红方队伍编号和得分
+- `.blue-team`: 蓝方队伍编号和得分
+
+### 2. 队伍列表表格
+
+**选择器**: `table.table-bordered.table-hover.table-responsive`
+
+**表头结构 (th)**:
+```
+| Team | Team Name | Division | Organization | Location |
+```
+
+### 3. 排名表格
+
+**选择器**: `table.table-hover`
+
+**表头结构 (th)**:
+```
+| 等级 | 团队 | 名称 | Avg. Points |
+```
+
+### 4. 决赛入围者排名
+
+**选择器**: `table.table-hover`
+
+**表头结构 (th)**:
+```
+| 等级 | 团队 | 名称 | 得分 |
+```
+
+---
+
+## 📝 解析规则锁定
+
+### 比赛结果解析规则
+
+```javascript
+// 选择器
+const TABLE_SELECTOR = 'table.match-results.viqc-match-results';
+const ROW_SELECTOR = 'tbody tr';
+
+// 提取字段
+const matchCol = row.querySelector('.match-col');      // 比赛编号和时间
+const redTeam = row.querySelectorAll('.red-team')[0];  // 红方队伍
+const redScore = row.querySelectorAll('.red-team')[1]; // 红方得分
+const blueTeam = row.querySelectorAll('.blue-team')[0]; // 蓝方队伍
+const blueScore = row.querySelectorAll('.blue-team')[1]; // 蓝方得分
+
+// 数据格式
+{
+  matchId: "TeamWork #2",
+  time: "Aug 15th at 10:01 AM",
+  redTeam: "1268A",
+  redScore: "233",
+  blueTeam: "1268K",
+  blueScore: "233"
+}
+```
+
+### 比赛编号格式
+
+- 资格赛: `TeamWork #数字` (如 TeamWork #2)
+- 淘汰赛: `Match #数字-数字` (如 Match #1-1)
+
+---
+
+## ✅ 探路完成
+
+**结论**: 
+1. 目标网站使用 Cloudflare 保护，需要无头浏览器
+2. 比赛结果表格结构清晰，可直接解析
+3. 红蓝方队伍和得分通过 class 区分
+4. 比赛编号和时间在 `.match-col` 中
+
+**下一步**: 
+更新 Worker 代码，使用无头浏览器抓取并解析数据
