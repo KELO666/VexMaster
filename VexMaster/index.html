@@ -106,6 +106,10 @@
         .btn-poster { background: linear-gradient(135deg, #3b82f6, #8b5cf6); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 10px rgba(59,130,246,0.3); }
         .btn-poster:active { transform: scale(0.95); }
         
+        .btn-sync { background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 10px rgba(16,185,129,0.3); transition: all 0.2s; }
+        .btn-sync:active { transform: scale(0.95); }
+        .btn-sync:disabled { opacity: 0.6; cursor: not-allowed; }
+        
         #poster-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 9999; flex-direction: column; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
         #poster-preview { width: 85%; max-height: 70vh; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); object-fit: contain; -webkit-touch-callout: default; pointer-events: auto; }
         .poster-close { position: absolute; top: calc(30px + env(safe-area-inset-top)); right: 30px; color: white; font-size: 30px; font-weight: bold; cursor: pointer; background: rgba(255,255,255,0.2); width: 40px; height: 40px; border-radius: 50%; text-align: center; line-height: 36px; }
@@ -165,6 +169,7 @@
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                 <span style="font-weight: bold; font-size: 15px; color: #555;">队伍与赛区</span>
                 <div style="display: flex; gap: 8px; align-items: center;">
+                    <button id="sync-btn" class="btn-sync" onclick="window.syncFromButton()">🔄 同步比分</button>
                     <button id="toggle-done-btn" onclick="window.toggleHideDone()" style="background:#f1f5f9; color:#64748b; border:none; padding:6px 10px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer; transition:all 0.2s;">隐藏已赛</button>
                     <select id="division-filter" onchange="window.changeDivisionFilter(this.value)" style="padding: 4px 8px; border-radius: 6px; border: 1px solid #ccc; font-size: 13px; background: #fff; max-width: 110px; outline: none;">
                         <option value="All">全部赛区</option>
@@ -697,6 +702,149 @@
 
             document.getElementById('fab-locate').style.display = (pageId === 'master') ? 'flex' : 'none';
         }
+
+        // ============================================================
+        // 数据同步模块 - 从 Cloudflare Worker 获取实时比分
+        // ============================================================
+        const WORKER_URL = 'https://YOUR_WORKER_URL_HERE';
+
+        window.syncFromButton = function() {
+            const btn = document.getElementById('sync-btn');
+            const originalText = btn.innerText;
+            btn.innerText = '同步中...';
+            btn.disabled = true;
+            
+            // 弹出输入框让用户输入目标 URL
+            const targetUrl = prompt('请输入比赛结果页面的 URL：\n\n例如：https://events.vex.com/zh-CN/robot-competitions/vex-iq-competition/RE-VIQRC-26-5111.html');
+            
+            if (!targetUrl) {
+                btn.innerText = originalText;
+                btn.disabled = false;
+                return;
+            }
+            
+            window.syncScoresFromWeb(targetUrl).finally(() => {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            });
+        };
+
+        window.syncScoresFromWeb = async function(targetUrl) {
+            console.log('[SyncData] ========== 开始同步比分 ==========');
+            console.log('[SyncData] 目标网址:', targetUrl);
+            
+            // 1. 获取参数：从全局变量 globalMatches 提取所有比赛 ID
+            if (typeof globalMatches === 'undefined' || globalMatches.length === 0) {
+                console.error('[SyncData] 错误：globalMatches 为空，请先导入 PDF 数据');
+                alert('请先导入 PDF 对阵表数据！');
+                return;
+            }
+
+            const matchIds = [...new Set(globalMatches.map(m => m.matchId))];
+            console.log('[SyncData] 提取到比赛 ID 列表:', matchIds);
+            console.log('[SyncData] 比赛总数:', matchIds.length);
+
+            // 2. 发送网络请求：向 Worker 获取比分数据
+            console.log('[SyncData] 正在发送请求到 Worker...');
+            
+            try {
+                const response = await fetch(WORKER_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        targetUrl: targetUrl,
+                        matchIds: matchIds
+                    })
+                });
+
+                // 3. 处理响应
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    console.error('[SyncData] Worker 返回错误:', errorData);
+                    alert('获取比分失败：' + (errorData.message || errorData.error));
+                    return;
+                }
+
+                const scoreDataList = await response.json();
+                console.log('[SyncData] Worker 返回数据:', scoreDataList);
+                console.log('[SyncData] 解析到', scoreDataList.length, '条比分数据');
+
+                // 4. 核心映射逻辑：将比分数据匹配到对应的队伍
+                let updatedCount = 0;
+                
+                console.log('[SyncData] 开始匹配队伍...');
+                
+                for (const scoreData of scoreDataList) {
+                    const { matchId, redTeam, redScore, blueTeam, blueScore } = scoreData;
+                    console.log(`[SyncData] 处理比赛 ${matchId}: 红方=${redTeam}(${redScore}), 蓝方=${blueTeam}(${blueScore})`);
+                    
+                    // 在 globalMatches 中查找该比赛
+                    const match = globalMatches.find(m => m.matchId === matchId);
+                    
+                    if (!match) {
+                        console.log(`[SyncData] 警告：在 globalMatches 中未找到比赛 ${matchId}`);
+                        continue;
+                    }
+
+                    // 更新红方队伍的得分
+                    const redKey = `${matchId}_${match.team1}`;
+                    scoresDb[redKey] = String(redScore);
+                    console.log(`[SyncData] 保存红方得分: ${redKey} = ${redScore}`);
+
+                    // 更新蓝方队伍的得分
+                    const blueKey = `${matchId}_${match.team2}`;
+                    scoresDb[blueKey] = String(blueScore);
+                    console.log(`[SyncData] 保存蓝方得分: ${blueKey} = ${blueScore}`);
+
+                    updatedCount++;
+                }
+
+                console.log('[SyncData] 队伍匹配完成，更新了', updatedCount, '场比赛的得分');
+
+                // 5. 状态持久化
+                console.log('[SyncData] 正在保存数据到 LocalStorage...');
+                
+                if (typeof window.saveData === 'function') {
+                    window.saveData();
+                    console.log('[SyncData] 数据保存成功');
+                } else {
+                    console.error('[SyncData] 错误：找不到 saveData 函数');
+                }
+
+                // 6. UI 重绘
+                console.log('[SyncData] 正在刷新 UI...');
+                
+                if (typeof window.renderSingleTeam === 'function') {
+                    window.renderSingleTeam();
+                    console.log('[SyncData] 单队视图刷新完成');
+                } else {
+                    console.error('[SyncData] 错误：找不到 renderSingleTeam 函数');
+                }
+
+                if (typeof window.renderMasterTimeline === 'function') {
+                    window.renderMasterTimeline();
+                    console.log('[SyncData] 大师总表刷新完成');
+                } else {
+                    console.error('[SyncData] 错误：找不到 renderMasterTimeline 函数');
+                }
+
+                // 7. 完成提示
+                console.log('[SyncData] ========== 同步完成 ==========');
+                console.log(`[SyncData] 成功同步 ${updatedCount} 场比赛的比分`);
+                
+                alert(`✅ 比分同步成功！\n\n已更新 ${updatedCount} 场比赛的数据。`);
+
+            } catch (error) {
+                console.error('[SyncData] 网络错误:', error);
+                alert('同步失败：' + error.message + '\n\n请检查网络连接或 Worker 配置。');
+            }
+        };
+
+        // 初始化日志
+        console.log('[SyncData] 模块加载完成');
+        console.log('[SyncData] 可用函数: syncScoresFromWeb(targetUrl), syncFromButton()');
     </script>
 </body>
 </html>

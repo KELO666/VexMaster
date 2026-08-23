@@ -7,6 +7,35 @@
 
 ## 📌 最新迭代记录
 
+### 🕒 [2026-08-23 22:55:16]
+
+🎯 **[Target]**: 
+终结 Worker 逻辑迭代，清理任务队列幻觉，完成 iOS 端 index.html 的物理集成
+
+🛠️ **[Modifications]**:
+- `VexMaster/index.html`: 集成 syncApp.js 核心逻辑，添加同步按钮
+  - 添加 btn-sync CSS 样式
+  - 在大师总表页面添加 "🔄 同步比分" 按钮
+  - 实现 syncFromButton() 函数，弹出 URL 输入框
+  - 实现 syncScoresFromWeb() 函数，完整同步逻辑
+  - 添加状态反馈：按钮文字变更为 "同步中..."
+- `CHANGELOG.md`: 清理所有无头浏览器/Puppeteer 相关的待办事项
+
+🐛 **[Sandbox Result/Error]**: 
+无沙箱运行，代码集成成功
+
+💡 **[Next Step]**: 
+部署 Worker，配置 URL，测试完整同步流程
+
+**已完成**:
+- ✅ 放弃 Puppeteer 方案，Worker 使用 HTMLRewriter 状态机
+- ✅ 集成 syncApp.js 到 iOS 版本的 index.html
+- ✅ 添加同步按钮到大师总表页面
+- ✅ 实现状态反馈机制（按钮文字变更）
+- ✅ 清理 CHANGELOG 中的错误待办事项
+
+---
+
 ### 🕒 [2026-08-23 22:50:58]
 
 🎯 **[Target]**: 
@@ -318,19 +347,20 @@ dev      → 当前开发分支（v1.1-dev）
 
 ### ⚠️ 待处理事项
 1. ⚠️ 根目录有未跟踪文件：`.DS_Store`、`.freebuff/`、`node_modules/`
-2. ⚠️ syncApp.js 未集成到 index.html：需要添加到 iOS 版本中
-3. ⚠️ Worker URL 未配置：需要部署 Worker 并更新 syncApp.js 中的地址
-4. ⚠️ Worker 需要更新：使用无头浏览器抓取数据
+2. ⚠️ Worker URL 未配置：需要部署 Worker 并更新 index.html 中的占位符
+3. ⚠️ 需要测试完整同步流程
+4. ⚠️ Android 版本需要同步更新
 
 ---
 
 ## 📝 后续迭代计划
 
 ### 短期（本周）
-- [ ] 更新 Worker 代码，使用无头浏览器抓取数据
-- [ ] 集成 syncApp.js 到 iOS 版本的 index.html
+- [x] ~~更新 Worker 代码，使用无头浏览器抓取数据~~ (已放弃，使用 HTMLRewriter 状态机)
+- [x] 集成 syncApp.js 到 iOS 版本的 index.html
 - [ ] 部署 Cloudflare Worker 并配置 URL
 - [ ] 测试比分同步功能
+- [ ] 同步更新 Android 版本
 
 ### 中期（本月）
 - [ ] 添加数据导出备份功能
@@ -344,6 +374,6 @@ dev      → 当前开发分支（v1.1-dev）
 
 ---
 
-**最后更新**: 2026-08-23 22:50:58  
+**最后更新**: 2026-08-23 22:55:16  
 **维护者**: Kelo  
 **状态**: 开发中
