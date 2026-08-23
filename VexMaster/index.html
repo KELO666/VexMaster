@@ -706,14 +706,7 @@
         // ============================================================
         // 数据同步模块 - 从 Cloudflare Worker 获取实时比分
         // ============================================================
-        const WORKER_URL = 'http://127.0.0.1:8787';
-        
-        // 【Mock 数据】用于本地测试，3 场典型比赛（1 场资格赛 + 2 场不同队伍）
-        const MOCK_FETCH_RESULT = [
-          { matchId: 'TeamWork #2', redTeam: '1268A', redScore: '233', blueTeam: '1268K', blueScore: '233' },
-          { matchId: 'TeamWork #5', redTeam: '80077A', redScore: '0', blueTeam: '20868C', blueScore: '104' },
-          { matchId: 'TeamWork #10', redTeam: '996X', redScore: '238', blueTeam: '33566G', blueScore: '238' }
-        ];
+        const WORKER_URL = 'https://[你的_CLOUDFLARE_WORKER_域名]'; // ⚠️ TODO: 部署后替换此处的 URL
 
         window.syncFromButton = function() {
             const btn = document.getElementById('sync-btn');
@@ -755,38 +748,28 @@
             console.log('[SyncData] 正在发送请求到 Worker...');
             
             try {
-                // 【Mock 数据模式】用于本地测试，跳过真实网络请求
-                const USE_MOCK_DATA = true;
-                let scoreDataList;
-                
-                if (USE_MOCK_DATA) {
-                    // 使用本地 Mock 数据
-                    console.log('[SyncData] 使用 Mock 数据模式');
-                    console.log('[SyncData] Mock 数据:', MOCK_FETCH_RESULT);
-                    scoreDataList = MOCK_FETCH_RESULT;
-                } else {
-                    // 真实网络请求
-                    const response = await fetch(WORKER_URL, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            targetUrl: targetUrl,
-                            matchIds: matchIds
-                        })
-                    });
+                // 真实网络请求
+                console.log('[SyncData] 正在发送请求到 Worker...');
+                const response = await fetch(WORKER_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        targetUrl: targetUrl,
+                        matchIds: matchIds
+                    })
+                });
 
-                    // 3. 处理响应
-                    if (!response.ok) {
-                        const errorData = await response.json();
-                        console.error('[SyncData] Worker 返回错误:', errorData);
-                        alert('获取比分失败：' + (errorData.message || errorData.error));
-                        return;
-                    }
-
-                    scoreDataList = await response.json();
+                // 3. 处理响应
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    console.error('[SyncData] Worker 返回错误:', errorData);
+                    alert('获取比分失败：' + (errorData.message || errorData.error));
+                    return;
                 }
+
+                const scoreDataList = await response.json();
                 
                 console.log('[SyncData] 获取到数据:', scoreDataList);
                 console.log('[SyncData] 解析到', scoreDataList.length, '条比分数据');
