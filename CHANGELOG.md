@@ -7,6 +7,43 @@
 
 ## 📌 最新迭代记录
 
+### 🕒 [2026-08-26 19:34:51]
+
+📊 **[Progress]**: 80% (云端同步模块开发完成，待集成测试)
+
+🎯 **[Target]**: 
+VEX 赛程助手 1.5 版本：云端同步升级蓝图
+
+🛠️ **[Modifications]**:
+- `vex-sync.js`: 新建云端同步模块（API 通信 + 数据合并 + UI 注入）
+- `CHANGELOG.md`: 更新迭代日志
+
+🐛 **[Sandbox Result/Error]**: 
+✅ 模块创建成功，待集成到 index.html 进行测试
+
+💡 **[Next Step]**: 
+1. 将 vex-sync.js 集成到 VexMaster/index.html
+2. 进行端到端测试
+3. 部署到生产环境
+
+**模块功能**:
+```
+✅ API 通信层: 带 Bearer Token 的 fetch 请求
+✅ 数据合并层: 安全的比分覆盖逻辑
+✅ UI 交互层: SKU 绑定框和同步按钮
+✅ 配置管理: 本地存储配置
+✅ 分页支持: 自动翻页获取所有数据
+✅ 队伍校验: 二次防错校验机制
+```
+
+**API 端点**:
+```
+GET /events/search?sku[]=<SKU> -> 获取 Event ID
+GET /events/<id>/matches?page=<n>&per_page=100 -> 获取比赛数据
+```
+
+---
+
 ### 🕒 [2026-08-26 15:11:11] [ABORTED]
 
 📊 **[Progress]**: 0% (分支废弃，代码回滚至 v1.0 稳定版)
