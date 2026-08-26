@@ -7,26 +7,41 @@
 
 ## 📌 最新迭代记录
 
-### 🕒 [2026-08-24 01:03:51]
+### 🕒 [2026-08-26 15:11:11] [ABORTED]
 
-📊 **[Progress]**: 100% (数字神经已贯通，沙箱任务终结)
+📊 **[Progress]**: 0% (分支废弃，代码回滚至 v1.0 稳定版)
 
 🎯 **[Target]**: 
-修正探针 Payload 触发 200 OK，完成端到端联调的最后闭环，移交人类进行实弹测试
+彻底废弃 dev 迭代分支，全面回滚并锁定至最初的 v1.0 稳定版
 
 🛠️ **[Modifications]**:
-- `probe-test.js`: 更新为使用真实 Payload（targetUrl + matchIds）
-- `VexMaster/index.html`: 确认 WORKER_URL 已正确设置为生产环境 URL
-- `CHANGELOG.md`: 更新最终交接日志
+- `worker.js`: 已删除
+- `syncApp.js`: 已删除
+- `test-worker.js`: 已删除
+- `probe-test.js`: 已删除
+- `wrangler.toml`: 已删除
+- `WORKER_README.md`: 已删除
+- `scrape-vex*.js`: 已删除（所有抓取脚本）
+- `test-*.js`: 已删除（所有测试脚本）
+- `parsed-matches.json`: 已删除
+- `vex-*.html`: 已删除（临时页面）
+- `package.json` / `package-lock.json`: 已删除
+- `VexMaster/index.html`: 已还原至 v1.0 稳定版（移除同步按钮、CSS、JS 函数）
 
 🐛 **[Sandbox Result/Error]**: 
-❌ **Worker 仍不可达**：所有请求均返回 `fetch failed`
-- OPTIONS 预检请求失败
-- POST 请求失败
-- 原因：Worker 可能尚未部署，或网络环境受限
+✅ 回滚操作成功完成
 
 💡 **[Next Step]**: 
-**请人类指挥官在界面导入真实赛程 PDF，点击【🔄 同步比分】按钮，执行最终的端到端 UI 验收！**
+分支已废弃，代码库已安全回滚至稳定版基线。
+
+**回滚清单**:
+```
+✅ 删除文件: 16 个新增资产
+✅ 还原文件: VexMaster/index.html (v1.0 稳定版)
+✅ 分支状态: dev 分支已标记为 [ABORTED]
+```
+
+---
 
 **探针测试结果**:
 ```
