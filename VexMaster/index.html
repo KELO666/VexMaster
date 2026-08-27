@@ -573,19 +573,37 @@
                     console.log('[PullSchedule] 重新读取 globalMatches:', globalMatches.length, '场');
                 }
 
-                // 2. 更新导入页的数字统计
+                // 2. 重新读取比分数据 scoresDb
+                const savedScores = localStorage.getItem('vex_scores_ios');
+                if (savedScores) {
+                    scoresDb = JSON.parse(savedScores);
+                    console.log('[PullSchedule] 重新读取 scoresDb:', Object.keys(scoresDb).length, '条');
+                } else {
+                    scoresDb = {};
+                }
+
+                // 3. 重新读取完赛状态 doneDb
+                const savedDone = localStorage.getItem('vex_done_ios');
+                if (savedDone) {
+                    doneDb = JSON.parse(savedDone);
+                    console.log('[PullSchedule] 重新读取 doneDb:', Object.keys(doneDb).length, '条');
+                } else {
+                    doneDb = {};
+                }
+
+                // 4. 更新导入页的数字统计
                 const countEl = document.getElementById('total-matches-count');
                 if (countEl) {
                     countEl.innerText = globalMatches.length;
                     console.log('[PullSchedule] 更新统计数字:', globalMatches.length);
                 }
 
-                // 3. 强制清除旧的队伍缓存
+                // 5. 强制清除旧的队伍缓存
                 myTeams = [];
                 currentViewTeam = '';
                 console.log('[PullSchedule] 已清空旧的队伍缓存');
 
-                // 4. 触发全量渲染
+                // 6. 触发全量渲染
                 window.saveData();
                 window.updateTeamUI();
                 window.updateDivisionFilterUI();
