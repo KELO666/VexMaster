@@ -7,6 +7,57 @@
 
 ## 📌 最新执行记录
 
+### 🕒 [2026-08-27 14:38:03]
+
+**🎯 任务目标**: 修复比分数据内存状态不同步导致的 UI 不渲染问题
+
+**📊 执行结果**: ✅ 完成
+
+---
+
+#### [状态同步]
+重新赋值比分字典 (如 scoresDb) 的代码已追加：✅ 已完成
+- 修复代码:
+  ```javascript
+  // 2. 重新读取比分数据 scoresDb
+  const savedScores = localStorage.getItem('vex_scores_ios');
+  if (savedScores) {
+      scoresDb = JSON.parse(savedScores);
+  } else {
+      scoresDb = {};
+  }
+  ```
+
+重新赋值完赛状态 (如 doneDb) 的代码已追加：✅ 已完成
+- 修复代码:
+  ```javascript
+  // 3. 重新读取完赛状态 doneDb
+  const savedDone = localStorage.getItem('vex_done_ios');
+  if (savedDone) {
+      doneDb = JSON.parse(savedDone);
+  } else {
+      doneDb = {};
+  }
+  ```
+
+#### [异常/Bug 记录]
+无
+
+#### [下一步建议]
+提示指挥官刷新页面，再次测试比分渲染效果。
+
+---
+
+#### [文件变更汇总]
+```
+✅ VexMaster/index.html: 修复比分数据内存状态同步 (+21 行)
+✅ Git 提交: 55f225a
+```
+
+---
+
+## 📌 历史执行记录
+
 ### 🕒 [2026-08-27 14:27:23]
 
 **🎯 任务目标**: 修复 API 生成赛程后的内存状态同步问题
