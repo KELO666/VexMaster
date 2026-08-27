@@ -7,6 +7,59 @@
 
 ## 📌 最新执行记录
 
+### 🕒 [2026-08-27 14:27:23]
+
+**🎯 任务目标**: 修复 API 生成赛程后的内存状态同步问题
+
+**📊 执行结果**: ✅ 完成
+
+---
+
+#### [状态同步]
+重新赋值全局变量 (如 globalMatches) 的代码已追加：✅ 已完成
+- 修复位置: `pullFullSchedule` 函数成功回调中
+- 修复代码:
+  ```javascript
+  // 1. 重新读取全局变量 globalMatches
+  const savedMatches = localStorage.getItem('vex_matches_ios');
+  if (savedMatches) {
+      globalMatches = JSON.parse(savedMatches);
+  }
+  ```
+
+#### [UI 更新]
+赛程总数统计 DOM 元素已更新：✅ 已完成
+- 修复代码:
+  ```javascript
+  // 2. 更新导入页的数字统计
+  const countEl = document.getElementById('total-matches-count');
+  if (countEl) {
+      countEl.innerText = globalMatches.length;
+  }
+  ```
+
+#### [其他修复]
+- 清空旧的队伍缓存: `myTeams = []; currentViewTeam = '';`
+- 触发全量渲染: `renderMasterTimeline()`, `renderSingleTeam()` 等
+
+#### [异常/Bug 记录]
+无
+
+#### [下一步建议]
+提示指挥官重新拉取测试，验证“单队”视图是否可正常进入并搜索队伍。
+
+---
+
+#### [文件变更汇总]
+```
+✅ VexMaster/index.html: 修复内存状态同步逻辑 (+22 行)
+✅ Git 提交: 80bafe8
+```
+
+---
+
+## 📌 历史执行记录
+
 ### 🕒 [2026-08-27 14:23:43]
 
 **🎯 任务目标**: 内联 vex-api-sync.js 到 index.html 以确保预览环境正常
