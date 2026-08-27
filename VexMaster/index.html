@@ -13,7 +13,154 @@
     
     <script src="https://lib.baomitu.com/pdf.js/2.6.347/pdf.min.js"></script>
     <script src="https://lib.baomitu.com/html2canvas/1.4.1/html2canvas.min.js"></script>
-    <script src="vex-api-sync.js"></script>
+    <script>
+// ============================================================
+// VEX API 通信模块 (内联版本)
+// ============================================================
+(function() {
+  'use strict';
+
+  const API_BASE = 'https://events.vex.com/api/v2';
+  const LOG_PREFIX = '[VexApiSync]';
+
+  function log(message, ...args) { console.log(`${LOG_PREFIX} ${message}`, ...args); }
+  function logError(message, ...args) { console.error(`${LOG_PREFIX} ❌ ${message}`, ...args); }
+  function logSuccess(message, ...args) { console.log(`${LOG_PREFIX} ✅ ${message}`, ...args); }
+
+  async function fetchEventId(sku, token) {
+    log(`开始获取赛事 ID: SKU = ${sku}`);
+    if (!sku || typeof sku !== 'string') throw new Error('SKU 参数无效');
+    if (!token || typeof token !== 'string') throw new Error('Token 参数无效');
+    const url = `${API_BASE}/events?sku=${encodeURIComponent(sku)}`;
+    log(`请求 URL: ${url}`);
+    const response = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` } });
+    if (!response.ok) { const errorText = await response.text(); throw new Error(`HTTP ${response.status}: ${errorText}`); }
+    const data = await response.json();
+    log('API 响应数据:', data);
+    if (!data || !data.data || !Array.isArray(data.data) || data.data.length === 0) throw new Error(`未找到 SKU 为 ${sku} 的赛事`);
+    const firstEvent = data.data[0];
+    const eventId = firstEvent.id;
+    if (!eventId || typeof eventId !== 'number') throw new Error('无法提取有效的赛事 ID');
+    logSuccess(`获取赛事 ID 成功: ${eventId} (${firstEvent.name || '未知赛事'})`);
+    return eventId;
+  }
+
+  async function fetchMatchesData(eventId, token) {
+    log(`开始获取赛事比赛数据: eventId = ${eventId}`);
+    if (!eventId || typeof eventId !== 'number') throw new Error('EventId 参数无效');
+    if (!token || typeof token !== 'string') throw new Error('Token 参数无效');
+    let allMatches = []; let currentPage = 1; let lastPage = 1;
+    do {
+      const url = `${API_BASE}/events/${eventId}/divisions/1/matches?page=${currentPage}`;
+      log(`请求第 ${currentPage}/${lastPage} 页: ${url}`);
+      const response = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` } });
+      if (!response.ok) { const errorText = await response.text(); throw new Error(`HTTP ${response.status}: ${errorText}`); }
+      const data = await response.json();
+      if (!data || !data.data || !Array.isArray(data.data)) break;
+      allMatches = allMatches.concat(data.data);
+      if (data.meta && data.meta.last_page) lastPage = data.meta.last_page;
+      currentPage++;
+    } while (currentPage <= lastPage);
+    logSuccess(`获取赛事比赛数据完成: 共 ${allMatches.length} 场比赛`);
+    return allMatches;
+  }
+
+  function syncScoresToLocal(apiMatchesData) {
+    log('开始同步比分到本地...');
+    if (!apiMatchesData || !Array.isArray(apiMatchesData)) { logError('API 比赛数据无效'); return 0; }
+    let scoresDb = {}; let doneDb = {};
+    try {
+      const scoresJson = localStorage.getItem('vex_scores_ios');
+      const doneJson = localStorage.getItem('vex_done_ios');
+      if (scoresJson) scoresDb = JSON.parse(scoresJson);
+      if (doneJson) doneDb = JSON.parse(doneJson);
+    } catch (e) { logError('读取 LocalStorage 失败:', e); }
+    let updatedCount = 0;
+    for (const apiMatch of apiMatchesData) {
+      let matchId = apiMatch.matchnum ? `Q${apiMatch.matchnum}` : (apiMatch.name || '');
+      if (!matchId) continue;
+      if (!apiMatch.alliances || !Array.isArray(apiMatch.alliances)) continue;
+      for (const alliance of apiMatch.alliances) {
+        const score = alliance.score || 0;
+        if (!alliance.teams || !Array.isArray(alliance.teams)) continue;
+        for (const team of alliance.teams) {
+          const teamName = team.team ? team.team.name : (team.name || '');
+          if (!teamName) continue;
+          scoresDb[`${matchId}_${teamName}`] = String(score);
+          updatedCount++;
+        }
+        if (score > 0) doneDb[matchId] = true;
+      }
+    }
+    try {
+      localStorage.setItem('vex_scores_ios', JSON.stringify(scoresDb));
+      localStorage.setItem('vex_done_ios', JSON.stringify(doneDb));
+      logSuccess(`同步完成: 更新了 ${updatedCount} 条比分记录`);
+    } catch (e) { logError('写入 LocalStorage 失败:', e); }
+    return updatedCount;
+  }
+
+  async function runFullSync(sku, token) {
+    log('开始一键同步...');
+    if (!sku || sku.trim() === '') return { success: false, count: 0, message: 'SKU 参数无效' };
+    if (!token || token.trim() === '') return { success: false, count: 0, message: 'Token 参数无效' };
+    try {
+      const eventId = await fetchEventId(sku, token);
+      const matches = await fetchMatchesData(eventId, token);
+      const count = syncScoresToLocal(matches);
+      return { success: true, count, message: `同步成功，更新了 ${count} 条比分记录` };
+    } catch (error) {
+      return { success: false, count: 0, message: `同步失败: ${error.message}` };
+    }
+  }
+
+  function generateScheduleFromApi(apiMatchesData) {
+    log('开始从 API 生成赛程...');
+    if (!apiMatchesData || !Array.isArray(apiMatchesData)) { logError('API 比赛数据无效'); return 0; }
+    let newGlobalMatches = [];
+    for (const apiMatch of apiMatchesData) {
+      let matchId = apiMatch.matchnum ? `Q${apiMatch.matchnum}` : (apiMatch.name || '');
+      if (!matchId) continue;
+      let field = apiMatch.field || apiMatch.fieldname || '默认场地';
+      let time = '待定';
+      if (apiMatch.scheduled) {
+        try {
+          const d = new Date(apiMatch.scheduled);
+          const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
+          const period = d.getHours() >= 12 ? 'PM' : 'AM';
+          const h = d.getHours() > 12 ? d.getHours() - 12 : (d.getHours() === 0 ? 12 : d.getHours());
+          time = `周${dayNames[d.getDay()]} ${h}:${d.getMinutes().toString().padStart(2, '0')} ${period}`;
+        } catch (e) { time = '待定'; }
+      }
+      let team1 = 'TBD', team2 = 'TBD';
+      if (apiMatch.alliances && Array.isArray(apiMatch.alliances)) {
+        let allTeams = [];
+        for (const alliance of apiMatch.alliances) {
+          if (alliance.teams && Array.isArray(alliance.teams)) {
+            for (const team of alliance.teams) {
+              const teamName = team.team ? team.team.name : (team.name || '');
+              if (teamName) allTeams.push(teamName);
+            }
+          }
+        }
+        if (allTeams.length >= 2) { team1 = allTeams[0]; team2 = allTeams[1]; }
+        else if (allTeams.length === 1) { team1 = allTeams[0]; team2 = 'TBD'; }
+      }
+      newGlobalMatches.push({ matchId, field, time, timeValue: 0, team1, team2, division: '' });
+    }
+    log(`生成了 ${newGlobalMatches.length} 场比赛`);
+    try {
+      localStorage.setItem('vex_matches_ios', JSON.stringify(newGlobalMatches));
+      logSuccess('赛程已写入 LocalStorage');
+    } catch (e) { logError('写入 LocalStorage 失败:', e); }
+    syncScoresToLocal(apiMatchesData);
+    return newGlobalMatches.length;
+  }
+
+  window.VexApiSync = { fetchEventId, fetchMatchesData, syncScoresToLocal, runFullSync, generateScheduleFromApi };
+  log('API 通信模块已加载');
+})();
+    </script>
     
     <style>
         :root { --primary: #000; --bg: #f4f5f7; --text: #333; --card-bg: #ffffff; }
