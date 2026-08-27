@@ -7,6 +7,45 @@
 
 ## 📌 最新执行记录
 
+### 🕒 [2026-08-27 14:23:43]
+
+**🎯 任务目标**: 内联 vex-api-sync.js 到 index.html 以确保预览环境正常
+
+**📊 执行结果**: ✅ 完成
+
+---
+
+#### [修复状态]
+- **window.VexApiSync 全局挂载**: ✅ 已完成
+  - 验证: `typeof VexApiSync` 返回 `"object"`
+  - 修复方式: 将 vex-api-sync.js 代码内联到 index.html 的 <script> 标签中
+
+- **index.html 引入 script 标签**: ✅ 已完成
+  - 原先: `<script src="vex-api-sync.js"></script>`
+  - 修复: 直接内联代码，确保预览环境下也能正常加载
+
+---
+
+#### [异常/Bug 记录]
+- 原问题: 预览环境下 VexApiSync 仍然 undefined
+- 根因: 预览服务器无法正确加载外部脚本文件
+- 修复: 将 vex-api-sync.js 代码直接内联到 index.html
+
+#### [下一步建议]
+页面已准备就绪，可以填写真实的 API Token 和赛事 SKU 进行测试。
+
+---
+
+#### [文件变更汇总]
+```
+✅ VexMaster/index.html: 内联 vex-api-sync.js 代码 (+148 行)
+✅ Git 提交: 9a34fab
+```
+
+---
+
+## 📌 历史执行记录
+
 ### 🕒 [2026-08-27 14:09:52]
 
 **🎯 任务目标**: 修复文件目录层级错位导致的加载失败
