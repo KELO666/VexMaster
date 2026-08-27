@@ -202,8 +202,8 @@
    * @returns {number} 更新的比赛场次数量
    * 
    * 本地存储格式:
-   * - vex_scores_ios: { "Q1_53168C": "236", "Q2_12345A": "100", ... }
-   * - vex_done_ios: { "Q1": true, "Q2": true, ... }
+   * - vex_scores: { "Q1_53168C": "236", "Q2_12345A": "100", ... }
+   * - vex_done: { "Q1": true, "Q2": true, ... }
    */
   function syncScoresToLocal(apiMatchesData) {
     log('开始同步比分到本地...');
@@ -219,8 +219,8 @@
     let doneDb = {};
 
     try {
-      const scoresJson = localStorage.getItem('vex_scores_ios');
-      const doneJson = localStorage.getItem('vex_done_ios');
+      const scoresJson = localStorage.getItem('vex_scores');
+      const doneJson = localStorage.getItem('vex_done');
 
       if (scoresJson) {
         scoresDb = JSON.parse(scoresJson);
@@ -293,8 +293,8 @@
 
     // 3. 将更新后的数据写回 localStorage
     try {
-      localStorage.setItem('vex_scores_ios', JSON.stringify(scoresDb));
-      localStorage.setItem('vex_done_ios', JSON.stringify(doneDb));
+      localStorage.setItem('vex_scores', JSON.stringify(scoresDb));
+      localStorage.setItem('vex_done', JSON.stringify(doneDb));
       logSuccess(`同步完成: 更新了 ${updatedCount} 条比分记录`);
     } catch (e) {
       logError('写入 LocalStorage 失败:', e);
@@ -367,7 +367,7 @@
    * @returns {number} 生成的比赛场次数量
    * 
    * 本地存储格式:
-   * vex_matches_ios: [
+   * vex_matches: [
    *   { matchId: "Q1", field: "Field A", time: "周六 10:00 AM", team1: "53168C", team2: "12345A", division: "初中" },
    *   ...
    * ]
@@ -486,7 +486,7 @@
 
     // 6. 将组装好的赛程覆盖写入 LocalStorage
     try {
-      localStorage.setItem('vex_matches_ios', JSON.stringify(newGlobalMatches));
+      localStorage.setItem('vex_matches', JSON.stringify(newGlobalMatches));
       logSuccess('赛程已写入 LocalStorage');
     } catch (e) {
       logError('写入 LocalStorage 失败:', e);
