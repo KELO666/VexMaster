@@ -565,12 +565,33 @@
                 statusMsg.style.color = '#10b981';
                 alert(msg);
 
-                // 重新渲染页面
+                // 修复状态同步问题：重新读取全局变量
+                // 1. 重新读取全局变量 globalMatches
+                const savedMatches = localStorage.getItem('vex_matches_ios');
+                if (savedMatches) {
+                    globalMatches = JSON.parse(savedMatches);
+                    console.log('[PullSchedule] 重新读取 globalMatches:', globalMatches.length, '场');
+                }
+
+                // 2. 更新导入页的数字统计
+                const countEl = document.getElementById('total-matches-count');
+                if (countEl) {
+                    countEl.innerText = globalMatches.length;
+                    console.log('[PullSchedule] 更新统计数字:', globalMatches.length);
+                }
+
+                // 3. 强制清除旧的队伍缓存
+                myTeams = [];
+                currentViewTeam = '';
+                console.log('[PullSchedule] 已清空旧的队伍缓存');
+
+                // 4. 触发全量渲染
                 window.saveData();
                 window.updateTeamUI();
                 window.updateDivisionFilterUI();
                 if (window.renderMasterTimeline) window.renderMasterTimeline();
                 if (window.renderSingleTeam) window.renderSingleTeam();
+                console.log('[PullSchedule] 全量渲染完成');
 
             } catch (error) {
                 statusMsg.innerText = '拉取失败: ' + error.message;
