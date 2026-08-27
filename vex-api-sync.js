@@ -357,13 +357,157 @@
   }
 
   // ============================================================
+  // 云端赛程生成模块
+  // ============================================================
+
+  /**
+   * 从 API 数据生成本地赛程
+   * 
+   * @param {Array} apiMatchesData - 从 fetchMatchesData 获取的全量 JSON 数组
+   * @returns {number} 生成的比赛场次数量
+   * 
+   * 本地存储格式:
+   * vex_matches_ios: [
+   *   { matchId: "Q1", field: "Field A", time: "周六 10:00 AM", team1: "53168C", team2: "12345A", division: "初中" },
+   *   ...
+   * ]
+   */
+  function generateScheduleFromApi(apiMatchesData) {
+    log('开始从 API 生成赛程...');
+
+    // 参数校验
+    if (!apiMatchesData || !Array.isArray(apiMatchesData)) {
+      logError('API 比赛数据无效');
+      return 0;
+    }
+
+    let newGlobalMatches = [];
+
+    // 遍历 API 比赛数据
+    for (const apiMatch of apiMatchesData) {
+      // 1. 提取 matchnum，转为本地格式 matchId
+      let matchId = '';
+      if (apiMatch.matchnum) {
+        matchId = `Q${apiMatch.matchnum}`;
+      } else if (apiMatch.name) {
+        matchId = apiMatch.name;
+      } else {
+        log('跳过无编号的比赛:', apiMatch);
+        continue;
+      }
+
+      // 2. 提取 field（场地）
+      let field = '';
+      if (apiMatch.field) {
+        field = apiMatch.field;
+      } else if (apiMatch.fieldname) {
+        field = apiMatch.fieldname;
+      } else {
+        field = '默认场地';
+      }
+
+      // 3. 提取 scheduled 时间，格式化为友好的展示时间
+      let time = '';
+      if (apiMatch.scheduled) {
+        try {
+          const scheduledDate = new Date(apiMatch.scheduled);
+          const hours = scheduledDate.getHours();
+          const minutes = scheduledDate.getMinutes();
+          const dayOfWeek = scheduledDate.getDay();
+          
+          // 星期映射
+          const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
+          const dayStr = dayNames[dayOfWeek];
+          
+          // 时间格式化
+          const period = hours >= 12 ? 'PM' : 'AM';
+          const displayHours = hours > 12 ? hours - 12 : (hours === 0 ? 12 : hours);
+          const displayMinutes = minutes.toString().padStart(2, '0');
+          
+          time = `周${dayStr} ${displayHours}:${displayMinutes} ${period}`;
+        } catch (e) {
+          logError('时间解析失败:', e);
+          time = '待定';
+        }
+      } else {
+        time = '待定';
+      }
+
+      // 4. 遍历 alliances，提取队伍号
+      let team1 = '';
+      let team2 = '';
+
+      if (apiMatch.alliances && Array.isArray(apiMatch.alliances)) {
+        // 收集所有队伍号
+        let allTeams = [];
+
+        for (const alliance of apiMatch.alliances) {
+          if (alliance.teams && Array.isArray(alliance.teams)) {
+            for (const team of alliance.teams) {
+              const teamName = team.team ? team.team.name : (team.name || '');
+              if (teamName) {
+                allTeams.push(teamName);
+              }
+            }
+          }
+        }
+
+        // 拼装成本地需要的对阵格式
+        if (allTeams.length >= 2) {
+          team1 = allTeams[0];
+          team2 = allTeams[1];
+        } else if (allTeams.length === 1) {
+          team1 = allTeams[0];
+          team2 = 'TBD';
+        } else {
+          team1 = 'TBD';
+          team2 = 'TBD';
+        }
+      } else {
+        team1 = 'TBD';
+        team2 = 'TBD';
+      }
+
+      // 5. 组装本地单场比赛对象
+      const matchObj = {
+        matchId: matchId,
+        field: field,
+        time: time,
+        timeValue: 0, // 可后续扩展
+        team1: team1,
+        team2: team2,
+        division: '' // 可后续扩展
+      };
+
+      newGlobalMatches.push(matchObj);
+    }
+
+    log(`生成了 ${newGlobalMatches.length} 场比赛`);
+
+    // 6. 将组装好的赛程覆盖写入 LocalStorage
+    try {
+      localStorage.setItem('vex_matches_ios', JSON.stringify(newGlobalMatches));
+      logSuccess('赛程已写入 LocalStorage');
+    } catch (e) {
+      logError('写入 LocalStorage 失败:', e);
+    }
+
+    // 7. 顺便调用 syncScoresToLocal 更新比分
+    log('同时更新比分数据...');
+    syncScoresToLocal(apiMatchesData);
+
+    return newGlobalMatches.length;
+  }
+
+  // ============================================================
   // 公开 API
   // ============================================================
   window.VexApiSync = {
     fetchEventId,
     fetchMatchesData,
     syncScoresToLocal,
-    runFullSync
+    runFullSync,
+    generateScheduleFromApi
   };
 
   // 日志提示
@@ -373,5 +517,6 @@
   log('  - VexApiSync.fetchMatchesData(eventId, token)');
   log('  - VexApiSync.syncScoresToLocal(apiMatchesData)');
   log('  - VexApiSync.runFullSync(sku, token)');
+  log('  - VexApiSync.generateScheduleFromApi(apiMatchesData)');
 
 })();

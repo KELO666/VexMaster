@@ -153,6 +153,11 @@
                     onclick="window.syncCloudScores()">
                 🔄 云端同步比分
             </button>
+            <button id="pull-schedule-btn" class="btn-primary" 
+                    style="background: #8b5cf6; width: 100%; margin-top: 8px;"
+                    onclick="window.pullFullSchedule()">
+                🌐 一键拉取完整赛程 (无 PDF 时使用)
+            </button>
             <div id="sync-status-msg" style="text-align:center; font-size:12px; color:#888; margin-top:8px; display:none;"></div>
         </div>
 
@@ -357,6 +362,72 @@
                 statusMsg.innerText = '同步失败: ' + error.message;
                 statusMsg.style.color = '#ef4444';
                 alert('同步失败: ' + error.message);
+            } finally {
+                // 恢复按钮状态
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        /**
+         * 一键拉取完整赛程按钮点击事件
+         */
+        window.pullFullSchedule = async function() {
+            const btn = document.getElementById('pull-schedule-btn');
+            const statusMsg = document.getElementById('sync-status-msg');
+            const originalText = btn.innerText;
+
+            // 取出本地存好的 SKU 和 Token
+            const sku = document.getElementById('event-sku-input').value.trim();
+            const token = document.getElementById('api-token-input').value.trim();
+
+            // 若为空则提示用户填写
+            if (!sku) {
+                alert('请先填写赛事 SKU');
+                return;
+            }
+            if (!token) {
+                alert('请先填写 API Token');
+                return;
+            }
+
+            // 将按钮文字变更为“拉取中...”并禁用按钮
+            btn.innerText = '拉取中...';
+            btn.disabled = true;
+            statusMsg.style.display = 'block';
+            statusMsg.innerText = '正在从云端拉取完整赛程...';
+            statusMsg.style.color = '#f59e0b';
+
+            try {
+                // 1. 获取赛事 ID
+                statusMsg.innerText = '步骤 1/3: 获取赛事 ID...';
+                const eventId = await VexApiSync.fetchEventId(sku, token);
+
+                // 2. 获取完整赛程
+                statusMsg.innerText = '步骤 2/3: 获取完整赛程...';
+                const matches = await VexApiSync.fetchMatchesData(eventId, token);
+
+                // 3. 生成本地赛程并更新比分
+                statusMsg.innerText = '步骤 3/3: 生成本地赛程...';
+                const count = VexApiSync.generateScheduleFromApi(matches);
+
+                // 成功提示
+                const msg = `拉取成功，共生成 ${count} 场比赛`;
+                statusMsg.innerText = msg;
+                statusMsg.style.color = '#10b981';
+                alert(msg);
+
+                // 重新渲染页面
+                window.saveData();
+                window.updateTeamUI();
+                window.updateDivisionFilterUI();
+                if (window.renderMasterTimeline) window.renderMasterTimeline();
+                if (window.renderSingleTeam) window.renderSingleTeam();
+
+            } catch (error) {
+                statusMsg.innerText = '拉取失败: ' + error.message;
+                statusMsg.style.color = '#ef4444';
+                alert('拉取失败: ' + error.message);
             } finally {
                 // 恢复按钮状态
                 btn.innerText = originalText;
