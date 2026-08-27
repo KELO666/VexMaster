@@ -137,6 +137,25 @@
             <p style="margin:0; font-size:14px;">已提取总数据：<strong id="total-matches-count" style="font-size:18px; color:var(--primary);">0</strong> 场比赛</p>
         </div>
 
+        <!-- 云端同步配置卡片 -->
+        <div class="card" id="cloud-sync-card">
+            <h3 class="card-title">🌐 云端同步配置</h3>
+            <div class="input-group">
+                <input type="password" id="api-token-input" placeholder="API Token (Bearer Token)"
+                       style="font-size: 14px;" onblur="window.saveApiConfig()">
+            </div>
+            <div class="input-group">
+                <input type="text" id="event-sku-input" placeholder="赛事 SKU (如 RE-VIQRC-26-5508)"
+                       style="font-size: 14px; text-transform: uppercase;" onblur="window.saveApiConfig()">
+            </div>
+            <button id="sync-cloud-btn" class="btn-primary" 
+                    style="background: #3b82f6; width: 100%; margin-top: 8px;"
+                    onclick="window.syncCloudScores()">
+                🔄 云端同步比分
+            </button>
+            <div id="sync-status-msg" style="text-align:center; font-size:12px; color:#888; margin-top:8px; display:none;"></div>
+        </div>
+
         <div style="text-align:center; margin-top:50px; margin-bottom:20px;">
             <div onclick="document.getElementById('kelo-modal').style.display='flex'" style="display:inline-block; font-size:11px; color:#cbd5e1; letter-spacing:2px; cursor:pointer; font-weight:bold;">
                 DESIGNED BY <span style="color:#94a3b8;">KELO</span>
@@ -234,6 +253,8 @@
             if (countEl) countEl.innerText = globalMatches ? globalMatches.length : 0;
             if (myTeams && myTeams.length > 0) window.updateTeamUI();
             window.updateDivisionFilterUI();
+            // 加载云端同步配置
+            window.loadApiConfig();
         });
 
         window.saveData = function() {
@@ -253,6 +274,93 @@
                 window.updateTeamUI();
                 window.updateDivisionFilterUI();
                 alert("数据已全部清空，请重新导入最新文件。");
+            }
+        }
+
+        // ============================================================
+        // 云端同步配置函数
+        // ============================================================
+
+        /**
+         * 保存 API 配置到 LocalStorage
+         */
+        window.saveApiConfig = function() {
+            const token = document.getElementById('api-token-input').value.trim();
+            const sku = document.getElementById('event-sku-input').value.trim();
+            localStorage.setItem('vex_api_token_ios', token);
+            localStorage.setItem('vex_event_sku_ios', sku);
+            console.log('[CloudSync] API 配置已保存');
+        }
+
+        /**
+         * 从 LocalStorage 加载 API 配置
+         */
+        window.loadApiConfig = function() {
+            const token = localStorage.getItem('vex_api_token_ios') || '';
+            const sku = localStorage.getItem('vex_event_sku_ios') || '';
+            document.getElementById('api-token-input').value = token;
+            document.getElementById('event-sku-input').value = sku;
+            console.log('[CloudSync] API 配置已加载');
+        }
+
+        /**
+         * 云端同步比分按钮点击事件
+         */
+        window.syncCloudScores = async function() {
+            const btn = document.getElementById('sync-cloud-btn');
+            const statusMsg = document.getElementById('sync-status-msg');
+            const originalText = btn.innerText;
+
+            // 取出本地存好的 SKU 和 Token
+            const sku = document.getElementById('event-sku-input').value.trim();
+            const token = document.getElementById('api-token-input').value.trim();
+
+            // 若为空则提示用户填写
+            if (!sku) {
+                alert('请先填写赛事 SKU');
+                return;
+            }
+            if (!token) {
+                alert('请先填写 API Token');
+                return;
+            }
+
+            // 将按钮文字变更为“同步中...”并禁用按钮
+            btn.innerText = '同步中...';
+            btn.disabled = true;
+            statusMsg.style.display = 'block';
+            statusMsg.innerText = '正在连接云端...';
+            statusMsg.style.color = '#f59e0b';
+
+            try {
+                // 调用同步函数
+                const result = await VexApiSync.runFullSync(sku, token);
+
+                // 根据返回结果弹出提示
+                if (result.success) {
+                    statusMsg.innerText = result.message;
+                    statusMsg.style.color = '#10b981';
+                    alert(result.message);
+
+                    // 重新渲染页面
+                    window.saveData();
+                    window.updateTeamUI();
+                    window.updateDivisionFilterUI();
+                    if (window.renderMasterTimeline) window.renderMasterTimeline();
+                    if (window.renderSingleTeam) window.renderSingleTeam();
+                } else {
+                    statusMsg.innerText = result.message;
+                    statusMsg.style.color = '#ef4444';
+                    alert(result.message);
+                }
+            } catch (error) {
+                statusMsg.innerText = '同步失败: ' + error.message;
+                statusMsg.style.color = '#ef4444';
+                alert('同步失败: ' + error.message);
+            } finally {
+                // 恢复按钮状态
+                btn.innerText = originalText;
+                btn.disabled = false;
             }
         }
 
