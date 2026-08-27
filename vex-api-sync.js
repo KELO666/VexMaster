@@ -192,15 +192,186 @@
   }
 
   // ============================================================
+  // 数据合并模块
+  // ============================================================
+
+  /**
+   * 将 API 比赛数据静默合并到本地 LocalStorage
+   * 
+   * @param {Array} apiMatchesData - 从 fetchMatchesData 获取的全量 JSON 数组
+   * @returns {number} 更新的比赛场次数量
+   * 
+   * 本地存储格式:
+   * - vex_scores_ios: { "Q1_53168C": "236", "Q2_12345A": "100", ... }
+   * - vex_done_ios: { "Q1": true, "Q2": true, ... }
+   */
+  function syncScoresToLocal(apiMatchesData) {
+    log('开始同步比分到本地...');
+
+    // 参数校验
+    if (!apiMatchesData || !Array.isArray(apiMatchesData)) {
+      logError('API 比赛数据无效');
+      return 0;
+    }
+
+    // 1. 从 localStorage 读取现有数据
+    let scoresDb = {};
+    let doneDb = {};
+
+    try {
+      const scoresJson = localStorage.getItem('vex_scores_ios');
+      const doneJson = localStorage.getItem('vex_done_ios');
+
+      if (scoresJson) {
+        scoresDb = JSON.parse(scoresJson);
+        log(`读取现有比分数据: ${Object.keys(scoresDb).length} 条`);
+      }
+      if (doneJson) {
+        doneDb = JSON.parse(doneJson);
+        log(`读取现有完赛状态: ${Object.keys(doneDb).length} 条`);
+      }
+    } catch (e) {
+      logError('读取 LocalStorage 失败:', e);
+      // 继续执行，使用空对象
+    }
+
+    let updatedCount = 0;
+
+    // 2. 遍历 API 比赛数据
+    for (const apiMatch of apiMatchesData) {
+      // 提取 matchnum，拼接为本地格式 matchId
+      // API 返回的 matchnum 是数字（如 1），本地格式是 "Q1"
+      let matchId = '';
+      if (apiMatch.matchnum) {
+        matchId = `Q${apiMatch.matchnum}`;
+      } else if (apiMatch.name) {
+        // 如果没有 matchnum，尝试使用 name 字段
+        matchId = apiMatch.name;
+      } else {
+        log('跳过无编号的比赛:', apiMatch);
+        continue;
+      }
+
+      // 遍历该场比赛的 alliances（红、蓝联盟）
+      if (!apiMatch.alliances || !Array.isArray(apiMatch.alliances)) {
+        log(`比赛 ${matchId} 无联盟数据，跳过`);
+        continue;
+      }
+
+      for (const alliance of apiMatch.alliances) {
+        // 获取该联盟的 score
+        const score = alliance.score || 0;
+
+        // 获取该联盟下的 teams
+        if (!alliance.teams || !Array.isArray(alliance.teams)) {
+          continue;
+        }
+
+        // 遍历队伍，更新比分
+        for (const team of alliance.teams) {
+          // 提取队伍号 team.name（如 "53168C"）
+          const teamName = team.team ? team.team.name : (team.name || '');
+          if (!teamName) {
+            continue;
+          }
+
+          // 关键覆盖：将比分写入本地比分对象
+          const scoreKey = `${matchId}_${teamName}`;
+          scoresDb[scoreKey] = String(score);
+          log(`更新比分: ${scoreKey} = ${score}`);
+
+          updatedCount++;
+        }
+
+        // 状态更新：如果 score 大于 0，将完赛状态写入本地对象
+        if (score > 0) {
+          doneDb[matchId] = true;
+          log(`更新完赛状态: ${matchId} = true`);
+        }
+      }
+    }
+
+    // 3. 将更新后的数据写回 localStorage
+    try {
+      localStorage.setItem('vex_scores_ios', JSON.stringify(scoresDb));
+      localStorage.setItem('vex_done_ios', JSON.stringify(doneDb));
+      logSuccess(`同步完成: 更新了 ${updatedCount} 条比分记录`);
+    } catch (e) {
+      logError('写入 LocalStorage 失败:', e);
+    }
+
+    return updatedCount;
+  }
+
+  /**
+   * 一键同步完整流程
+   * 
+   * @param {string} sku - 赛事 SKU (如 "RE-VIQRC-26-5111")
+   * @param {string} token - API Bearer Token
+   * @returns {Promise<object>} 同步结果 { success: boolean, count: number, message: string }
+   * 
+   * @example
+   * const result = await VexApiSync.runFullSync('RE-VIQRC-26-5111', 'your-token');
+   * console.log(result.message); // "同步成功，更新了 45 场比赛的比分"
+   */
+  async function runFullSync(sku, token) {
+    log('开始一键同步...');
+
+    // 1. 校验 sku 和 token 是否为空
+    if (!sku || typeof sku !== 'string' || sku.trim() === '') {
+      const msg = 'SKU 参数无效';
+      logError(msg);
+      return { success: false, count: 0, message: msg };
+    }
+    if (!token || typeof token !== 'string' || token.trim() === '') {
+      const msg = 'Token 参数无效';
+      logError(msg);
+      return { success: false, count: 0, message: msg };
+    }
+
+    try {
+      // 2. 获取赛事 ID
+      log('步骤 1/3: 获取赛事 ID...');
+      const eventId = await fetchEventId(sku, token);
+      log(`获取到赛事 ID: ${eventId}`);
+
+      // 3. 获取完整赛程
+      log('步骤 2/3: 获取完整赛程...');
+      const matches = await fetchMatchesData(eventId, token);
+      log(`获取到 ${matches.length} 场比赛数据`);
+
+      // 4. 执行静默写入
+      log('步骤 3/3: 同步比分到本地...');
+      const count = syncScoresToLocal(matches);
+
+      // 返回成功标识
+      const msg = `同步成功，更新了 ${count} 条比分记录`;
+      logSuccess(msg);
+      return { success: true, count, message: msg };
+
+    } catch (error) {
+      const msg = `同步失败: ${error.message}`;
+      logError(msg);
+      return { success: false, count: 0, message: msg };
+    }
+  }
+
+  // ============================================================
   // 公开 API
   // ============================================================
   window.VexApiSync = {
     fetchEventId,
-    fetchMatchesData
+    fetchMatchesData,
+    syncScoresToLocal,
+    runFullSync
   };
 
   // 日志提示
   log('API 通信模块已加载');
-  log('可用函数: VexApiSync.fetchEventId(sku, token), VexApiSync.fetchMatchesData(eventId, token)');
+  log('可用函数:');
+  log('  - VexApiSync.fetchEventId(sku, token)');
+  log('  - VexApiSync.fetchMatchesData(eventId, token)');
+  log('  - VexApiSync.syncScoresToLocal(apiMatchesData)');
+  log('  - VexApiSync.runFullSync(sku, token)');
 
 })();
