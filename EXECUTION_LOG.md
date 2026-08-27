@@ -7,6 +7,46 @@
 
 ## 📌 最新执行记录
 
+### 🕒 [2026-08-27 14:03:24]
+
+**🎯 任务目标**: 修复 API 模块的全局引用 (VexApiSync is not defined)
+
+**📊 执行结果**: ✅ 完成
+
+---
+
+#### [修复状态]
+- **window.VexApiSync 全局挂载**: ✅ 已完成
+  - 文件: `vex-api-sync.js` 第 505-515 行
+  - 状态: 已正确暴露到 window 对象
+
+- **index.html 引入 script 标签**: ✅ 已完成
+  - 文件: `VexMaster/index.html` 第 15 行
+  - 修复内容: 在 CDN 脚本后添加 `<script src="vex-api-sync.js"></script>`
+  - 修复原因: 原先未引入该脚本，导致 VexApiSync 未定义
+
+---
+
+#### [异常/Bug 记录]
+- 原问题: `ReferenceError: VexApiSync is not defined`
+- 根因: index.html 未引入 vex-api-sync.js 脚本
+- 修复: 在 head 标签中添加 script 引入
+
+#### [下一步建议]
+提示指挥官重新刷新页面，再次点击同步按钮测试。
+
+---
+
+#### [文件变更汇总]
+```
+✅ VexMaster/index.html: 添加 vex-api-sync.js 脚本引入 (+1 行)
+✅ Git 提交: 4599f5c
+```
+
+---
+
+## 📌 历史执行记录
+
 ### 🕒 [2026-08-27 13:55:21]
 
 **🎯 任务目标**: VEX 赛程助手 (iOS端) API 替代 PDF 生成赛程模块
