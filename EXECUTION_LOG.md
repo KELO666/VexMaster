@@ -5,6 +5,320 @@
 
 ---
 
+### 🕒 [2026-08-29 03:00:00]
+
+**🎯 任务目标**: VEX 赛程助手 v2.1 全线升级 — Android 同步与文档归档
+
+**📊 执行结果**: ✅ 完成
+
+---
+
+#### [Android 升级]
+2.1 核心逻辑已平移，原生 API 完好，存储 Key 已安全适配：✅ 已完成
+
+**vex-api-sync.js 完全重写**:
+- `fetchEventId` — 返回 `{ id, name, divisions }`，支持多赛区
+- `fetchMatchesData` — 新增 `divisionId` 参数，URL 动态化
+- `fetchRankings` — 新增排名抓取函数
+- `mergeRankingsToLocalStorage` — 排名数据合并 (Key: `vex_rankings`)
+- `runFullSync` — 多赛区遍历 + 排名抓取
+- `generateScheduleFromApi` — 读取 `_divisionName`
+- `formatDivisionName` — 赛区名称极简净化
+- **所有 LocalStorage Key 已适配为 Android 无后缀格式**
+
+**index.html 改造**:
+- CSS: 新增 `.sku-row`, `.btn-remove-sku`, `.team-rank` 样式
+- HTML: 动态 SKU 容器 + `+ 添加赛事 SKU` 按钮
+- JS: 新增 `addSkuInput()`, `removeSkuInput()`, `getSkuList()` 辅助函数
+- JS: 重写 `saveApiConfig()`, `loadApiConfig()` 支持多 SKU JSON 序列化
+- JS: 重写 `syncCloudScores()` — 多 SKU 并发 + 多赛区 + 排名刷新
+- JS: 重写 `pullFullSchedule()` — 多 SKU + 多赛区遍历 + 排名抓取
+- JS: 更新 `renderSingleTeam()` — 排名徽章渲染
+- JS: 更新 `clearAllData()` — 重置 `rankingsDb`
+- JS: 更新 `DOMContentLoaded` — 加载 `rankingsDb`
+- 全局变量新增 `rankingsDb`
+
+**Android 原生 API 保护**:
+- `plus.gallery.save` 海报保存逻辑未触碰
+- `savePosterToGallery()` 函数完整保留
+- `plus.nativeObj.Bitmap` 海报生成逻辑未动
+
+---
+
+#### [文档归档]
+README.md 与 PROJECT_HANDOVER.md 已全面升级至 v2.1：✅ 已完成
+
+**README.md 更新**:
+- 版本号: v2.0 → v2.1
+- 新增特性: 多赛事并发聚合、极简排名静默抓取、智能赛区净化
+- 更新对比表: 新增 `vex_rankings` / `vex_rankings_ios` Key
+
+**PROJECT_HANDOVER.md 更新**:
+- 版本号: v2.0 → v2.1，更新日期: 2026-08-29
+- 新增驱动模式: 多赛区并发模式 (v2.1 核心)
+- 存储字典: 双端新增 `vex_event_sku` (JSON 数组) 和 `vex_rankings` / `vex_rankings_ios`
+- API 函数表: 新增 `fetchRankings`, `mergeRankingsToLocalStorage`, `formatDivisionName`
+- 新增多赛区嵌套遍历机制说明
+
+---
+
+#### [异常/Bug 记录]
+无
+
+#### [下一步建议]
+提示指挥官使用 HBuilderX 进行 Android 端的最终云打包 (APK)，并执行 Git 全量推送。
+
+---
+
+#### [文件变更汇总]
+```
+✅ VEX_Master_Android/vex-api-sync.js: 完全重写 (+310 行)
+✅ VEX_Master_Android/index.html: 多处修改 (CSS + HTML + JS)
+✅ README.md: 版本升级至 v2.1 + 新增 3 大特性说明
+✅ PROJECT_HANDOVER.md: 版本升级至 v2.1 + 存储字典/API 表扩充
+✅ EXECUTION_LOG.md: 新增执行日志条目
+```
+
+---
+
+### 🕒 [2026-08-29 02:00:00]
+
+**🎯 任务目标**: VEX 赛程助手 (iOS 端) 赛区名称极简格式化
+
+**📊 执行结果**: ✅ 完成
+
+---
+
+#### [UI 净化]
+赛区名称格式化函数 `formatDivisionName` 已成功注入：✅ 已完成
+
+**函数逻辑**:
+```javascript
+function formatDivisionName(eventName, divName) {
+  // 1. 提取学段: 小学/ES → 小学组, 初中/MS → 初中组, 高中/HS → 高中组
+  // 2. 提取分区: Final → Final, Division A → A区, Division 1 → 1区
+  // 3. 组合: level + ' ' + div (如 '小学组 A区')
+  // 兜底: 截断原名前 15 字符
+}
+```
+
+**注入位置**:
+- `VexMaster/vex-api-sync.js`: 第 335 行（模块内部函数）
+- `VexMaster/index.html` 内联模块: 第 131 行（同上）
+- 通过 `window.VexApiSync.formatDivisionName` 公开暴露
+
+**转换示例**:
+| 原始输入 | 输出 |
+|---------|------|
+| `明德启智杯...VIQRC...` / `Division A` | `小学组 A区` |
+| `xxx初中xx...` / `Division 1` | `初中组 1区` |
+| `xxx高中xx...` / `Division B` | `高中组 B区` |
+| `某赛事` / `Final` | `Final` |
+| `某赛事` / `Unknown Division` | `Unknown Division` |
+
+---
+
+#### [数据映射]
+抓取循环中已替换为极简命名格式：✅ 已完成
+
+**替换位置**:
+- `vex-api-sync.js` `runFullSync`: `formatDivisionName(eventInfo.name, div.name)`
+- `index.html` 内联 `runFullSync`: 同上
+- `index.html` `pullFullSchedule`: `VexApiSync.formatDivisionName(eventInfo.name, div.name)`
+
+**旧代码已清除**:
+- `divFullName = eventInfo.name + ' - ' + div.name` → 全部删除
+- `m._divisionName = divFullName` → 替换为 `formatDivisionName(...)` 调用
+
+---
+
+#### [异常/Bug 记录]
+无
+
+#### [下一步建议]
+提示指挥官重新拉取数据，检查下拉菜单的视觉效果。
+
+---
+
+#### [文件变更汇总]
+```
+✅ VexMaster/vex-api-sync.js: 新增 formatDivisionName 函数 + 替换 runFullSync 拼接
+✅ VexMaster/index.html: 新增 formatDivisionName 内联 + 替换 runFullSync/pullFullSchedule 拼接
+✅ EXECUTION_LOG.md: 新增执行日志条目
+```
+
+---
+
+### 🕒 [2026-08-29 01:00:00]
+
+**🎯 任务目标**: VEX 赛程助手 (iOS 端) 支持多赛区嵌套并发与极简排名系统
+
+**📊 执行结果**: ✅ 完成
+
+---
+
+#### [赛区突破]
+已解除 `divisions/1` 硬编码，实现按 SKU 下的真实赛区动态遍历：✅ 已完成
+
+**vex-api-sync.js 改造**:
+- `fetchEventId(sku, token)` — 返回值从 `eventId` 改为 `{ id, name, divisions }` 对象
+  - 提取 `firstEvent.divisions` 数组，无此字段时回退为 `[{ id: 1, name: 'Division 1' }]`
+- `fetchMatchesData(eventId, divisionId, token)` — 新增 `divisionId` 参数
+  - URL 从 `divisions/1/matches` 改为 `divisions/${divisionId}/matches`
+- `runFullSync(sku, token)` — 内部新增赛区循环：
+  - 获取 `eventInfo` → 遍历 `eventInfo.divisions`
+  - 每个赛区的每场比赛标注 `m._divisionName = eventInfo.name + ' - ' + div.name`
+  - 所有赛区比赛数据合并后统一传给 `syncScoresToLocal`
+- `generateScheduleFromApi(apiMatchesData)` — 读取 `apiMatch._divisionName` 作为 `division` 字段
+
+**index.html 内联模块同步改造**:
+- 同步更新 `fetchEventId`、`fetchMatchesData`、`runFullSync`、`generateScheduleFromApi` 内联版本
+
+**UI 层 pullFullSchedule 改造**:
+- 获取 `eventInfo` 后遍历 `eventInfo.divisions`
+- 每个赛区独立调用 `fetchMatchesData(eventInfo.id, div.id, token)`
+- 赛区名称格式: `赛事名 - 赛区名`（如 `RE-VIQRC-26-xxxx - Division 1`）
+
+---
+
+#### [排名引擎]
+排名 API 已接入并成功存入 `vex_rankings_ios`：✅ 已完成
+
+**新增函数**:
+- `fetchRankings(eventId, divisionId, token)` — 端点: `/events/${eventId}/divisions/${divisionId}/rankings`
+  - 返回排名数组，失败时返回空数组（不影响主流程）
+- `mergeRankingsToLocalStorage(apiRankingsData)` — 将排名数组转为 `{ 队伍号: 排名数字 }` 字典
+  - 提取 `entry.team.name` 和 `entry.rank`（或 `entry.rankingsort1`）
+  - 写入 `localStorage.setItem('vex_rankings_ios', JSON.stringify(rankingsDb))`
+  - 每次拉取直接覆盖，多赛区排名合并
+
+**集成位置**:
+- `runFullSync` — 遍历赛区时同步抓取排名
+- `pullFullSchedule` — 遍历赛区时同步抓取排名
+- 全局变量 `rankingsDb` — 页面加载时从 `vex_rankings_ios` 初始化
+
+---
+
+#### [UI 极简]
+单队视图已实现纯数字排名渲染：✅ 已完成
+
+**CSS 新增**:
+- `.team-rank` — 金黄色渐变背景，圆角胶囊样式，`font-weight: 800`
+- 渐变色: `#f59e0b → #d97706`（琥珀色系），白色文字
+
+**渲染逻辑**:
+- `renderSingleTeam()` 中读取 `rankingsDb[currentViewTeam]`
+- 若有排名: 在队伍号旁渲染 `<span class="team-rank">🏅 排名: ${rank}</span>`
+- 若无排名: 不显示（静默跳过）
+- 排名 badge 位于队伍号 h2 右侧，与 "生成分享海报" 按钮对齐
+
+**其他更新**:
+- `syncCloudScores` 同步后重新读取 `rankingsDb`
+- `pullFullSchedule` 拉取后重新读取 `rankingsDb`
+- `clearAllData` 清空时重置 `rankingsDb = {}`
+- `DOMContentLoaded` 加载时初始化 `rankingsDb`
+
+---
+
+#### [异常/Bug 记录]
+无
+
+#### [下一步建议]
+提示指挥官在 iOS 端浏览器刷新页面，点击同步比分按钮，测试分赛区名称显示和单队排名渲染。
+
+---
+
+#### [文件变更汇总]
+```
+✅ VexMaster/vex-api-sync.js: 完全重写 (+475 行)
+  - fetchEventId: 返回 { id, name, divisions }
+  - fetchMatchesData: 新增 divisionId 参数
+  - fetchRankings: 新增排名抓取函数
+  - mergeRankingsToLocalStorage: 新增排名合并函数
+  - runFullSync: 改为多赛区遍历 + 排名抓取
+  - generateScheduleFromApi: 读取 _divisionName
+
+✅ VexMaster/index.html: 多处修改
+  - 内联 API 模块: 同步更新全部函数签名
+  - CSS: 新增 .team-rank 样式
+  - 全局变量: 新增 rankingsDb
+  - pullFullSchedule: 多赛区遍历 + 排名抓取
+  - syncCloudScores: 同步后刷新 rankingsDb
+  - renderSingleTeam: 排名 badge 渲染
+  - clearAllData: 清空 rankingsDb
+  - DOMContentLoaded: 初始化 rankingsDb
+```
+
+---
+
+### 🕒 [2026-08-29 00:00:00]
+
+**🎯 任务目标**: VEX 赛程助手 (iOS 端) 支持多并发 SKU 动态输入与拉取
+
+**📊 执行结果**: ✅ 完成
+
+---
+
+#### [UI 改造]
+动态 + 号输入框及存取回显逻辑：✅ 已完成
+- 原单 SKU `<input id="event-sku-input">` → `<div id="sku-inputs-container">` 动态容器
+- 新增按钮 `+ 添加赛事 SKU`（蓝色虚线边框，与 UI 整体风格一致）
+- 新增 `window.addSkuInput(value)` — 动态创建 SKU 输入框行，支持预填值，新增行自动聚焦
+- 新增 `window.removeSkuInput(btn)` — 删除指定 SKU 行（至少保留 1 个，删除后自动触发保存）
+- 新增 `.sku-row` / `.btn-remove-sku` CSS 样式（Flex 对齐，红色 × 删除按钮）
+- 去掉 `#event-sku-input` ID，改为 `.event-sku-input` class，支持 `querySelectorAll` 批量采集
+
+#### [存取适配]
+多 SKU LocalStorage 序列化：✅ 已完成
+- `saveApiConfig()` — 使用 `querySelectorAll('.event-sku-input')` 遍历所有输入框，过滤空值去重，`JSON.stringify(skus)` 存入 `vex_event_sku_ios`
+- `loadApiConfig()` — 读取后尝试 `JSON.parse`，若为数组则拆分渲染；兼容旧版单 SKU 字符串格式（`catch` 中回退为 `[skuRaw]`）
+- 新增 `window.getSkuList()` 辅助函数 — 全局统一获取有效 SKU 数组，过滤空值 + 去重
+
+#### [引擎改造]
+vex-api-sync.js 多 SKU 遍历抓取与数组合并：✅ 已完成
+
+**syncCloudScores()（多 SKU 比分同步）**:
+- `for...of` 循环遍历 SKU 数组，逐个调用 `VexApiSync.runFullSync(sku, token)`
+- 累加各 SKU 的比分更新数 `totalUpdated`
+- 单个 SKU 失败时收集错误信息，不影响其他 SKU
+- 循环结束后统一重新读取 `scoresDb`、`doneDb` 全局变量，触发全量渲染
+
+**pullFullSchedule()（多 SKU 聚合拉取）**:
+- `for...of` 循环遍历 SKU 数组
+- 每个 SKU: `fetchEventId(sku, token)` → `fetchMatchesData(eventId, token)`
+- `allMatchesData = allMatchesData.concat(matches)` 聚合全量比赛数据
+- 循环结束后统一调用 `generateScheduleFromApi(allMatchesData)` + `syncScoresToLocal(allMatchesData)`
+- 聚合失败的 SKU 汇总展示在 alert 中
+
+**进度提示**:
+- 单 SKU 时: `正在连接云端...`
+- 多 SKU 时: `(1/2) 获取赛事 ID: RE-VIQRC-26-xxxx...`，实时显示当前进度
+
+#### [向后兼容]
+- `vex-api-sync.js` 未做任何改动（它只接收单个 SKU），多 SKU 聚合逻辑完全在 UI 层完成
+- 旧版单 SKU 数据（字符串格式）在 `loadApiConfig()` 中自动兼容
+- Android 端未受影响（操作范围仅限 `VexMaster/`）
+
+#### [异常/Bug 记录]
+无
+
+#### [下一步建议]
+提示指挥官在 iOS 端浏览器刷新页面，点击 `+` 号填入初中和小学两个 SKU 进行端到端测试。
+
+---
+
+#### [文件变更汇总]
+```
+✅ VexMaster/index.html: +68 行, -89 行（净减 21 行，代码更紧凑）
+  - CSS: 新增 .sku-row, .btn-remove-sku 样式
+  - HTML: 动态 SKU 容器 + 添加按钮
+  - JS: 新增 addSkuInput(), removeSkuInput(), getSkuList()
+  - JS: 重写 saveApiConfig(), loadApiConfig() 支持多 SKU
+  - JS: 重写 syncCloudScores(), pullFullSchedule() 支持多 SKU 并发
+```
+
+---
+
 ### 🕒 [2026-08-27 15:50:00]
 
 **🎯 任务目标**: 完善 PROJECT_HANDOVER.md，补充双端架构详情与文件清单

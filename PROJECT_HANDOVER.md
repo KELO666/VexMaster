@@ -1,6 +1,6 @@
 # 📘 VEX 赛程管理助手 (VEX Schedule Master) - 开发者交接文档
 
-> **版本**: v2.0 | **最后更新**: 2026-08-27 | **维护者**: Kelo
+> **版本**: v2.1 | **最后更新**: 2026-08-29 | **维护者**: Kelo
 
 ---
 
@@ -18,6 +18,7 @@
 |------|------|----------|----------|
 | **📶 纯离线模式** | v1.0 基石 | 本地 PDF 解析 + LocalStorage | 体育馆无网络环境 |
 | **🌐 云端双擎模式** | v2.0 核心 | VEX 官方 API + 本地兜底 | 赛前联网拉取完整赛程 |
+| **🔥 多赛区并发模式** | v2.1 核心 | 多 SKU + 多 Division + 排名 | 大型赛事多组别聚合 |
 
 ---
 
@@ -130,7 +131,8 @@ VEX_Schedule_Master/
 | `vex_teams` | `Array<String>` | 关注队伍列表 |
 | `vex_current_team` | `String` | 当前查看的队伍号 |
 | `vex_api_token` | `String` | API Bearer Token |
-| `vex_event_sku` | `String` | 赛事 SKU |
+| `vex_event_sku` | `String` | 赛事 SKU (JSON 数组，支持多 SKU) |
+| `vex_rankings` | `Object` | 排名数据库，格式: `{ "53168C": 1, "12345A": 12 }` |
 
 ### iOS 端字典
 
@@ -142,7 +144,8 @@ VEX_Schedule_Master/
 | `vex_teams_ios` | `Array<String>` | 关注队伍列表 |
 | `vex_current_team_ios` | `String` | 当前查看的队伍号 |
 | `vex_api_token_ios` | `String` | API Bearer Token |
-| `vex_event_sku_ios` | `String` | 赛事 SKU |
+| `vex_event_sku_ios` | `String` | 赛事 SKU (JSON 数组，支持多 SKU) |
+| `vex_rankings_ios` | `Object` | 排名数据库，格式: `{ "53168C": 1, "12345A": 12 }` |
 
 ### 单场比赛数据结构
 
@@ -174,11 +177,16 @@ ${matchId}_${team}  →  如 "Q1_53168C"
 
 | 函数 | 功能 | API 端点 |
 |------|------|----------|
-| `fetchEventId(sku, token)` | 通过 SKU 获取赛事 ID | `GET /events?sku={sku}` |
-| `fetchMatchesData(eventId, token)` | 获取比赛数据 (自动分页) | `GET /events/{eventId}/divisions/1/matches` |
+| `fetchEventId(sku, token)` | 通过 SKU 获取赛事信息 (含 divisions 列表) | `GET /events?sku={sku}` |
+| `fetchMatchesData(eventId, divisionId, token)` | 获取指定赛区比赛数据 (自动分页) | `GET /events/{eventId}/divisions/{divId}/matches` |
+| `fetchRankings(eventId, divisionId, token)` | 获取指定赛区排名数据 | `GET /events/{eventId}/divisions/{divId}/rankings` |
 | `syncScoresToLocal(apiMatches)` | 比分静默合并到本地 | — |
-| `generateScheduleFromApi(apiMatches)` | 云端数据生成本地赛程 | — |
-| `runFullSync(sku, token)` | 一键同步完整流程 | — |
+| `mergeRankingsToLocalStorage(apiRankings)` | 排名数据合并到本地 ({ 队伍号: 排名 }) | — |
+| `generateScheduleFromApi(apiMatches)` | 云端数据生成本地赛程 (读取 `_divisionName`) | — |
+| `runFullSync(sku, token)` | 一键同步 (单 SKU，多赛区遍历 + 排名抓取) | — |
+| `formatDivisionName(eventName, divName)` | 赛区名称极简净化 (如 `小学组 A区`) | — |
+
+**多赛区嵌套遍历**：`runFullSync` 内部先获取 `eventInfo.divisions` 列表，再对每个赛区独立调用 `fetchMatchesData` + `fetchRankings`，最后合并全量数据统一写入。
 
 **自动分页逻辑**：读取响应体中的 `meta.last_page`，自动循环追加请求 `?page=2`, `?page=3`... 直到获取全量数据。
 

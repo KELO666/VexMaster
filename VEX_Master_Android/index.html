@@ -24,6 +24,10 @@
         .btn-clear { background: #fee2e2; color: #ef4444; border: none; padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: bold; cursor: pointer; }
         
         .input-group { display: flex; gap: 8px; margin-bottom: 10px; }
+        .sku-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+        .sku-row input { flex: 1; }
+        .btn-remove-sku { background: #fee2e2; color: #ef4444; border: none; width: 36px; height: 36px; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+        .btn-remove-sku:active { transform: scale(0.9); }
         input[type="text"], input[type="number"] { flex: 1; padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; background: #fafafa; }
         button.btn-primary { background: var(--primary); color: white; border: none; padding: 10px 18px; border-radius: 8px; font-size: 15px; font-weight: bold; cursor: pointer; }
         button:active { transform: scale(0.98); }
@@ -79,6 +83,7 @@
         /* 海报弹窗及按钮样式 */
         .btn-poster { background: linear-gradient(135deg, #3b82f6, #8b5cf6); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 10px rgba(59,130,246,0.3); }
         .btn-poster:active { transform: scale(0.95); }
+        .team-rank { display: inline-flex; align-items: center; gap: 3px; background: linear-gradient(135deg, #f59e0b, #d97706); color: white; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 800; margin-left: 8px; box-shadow: 0 2px 6px rgba(245,158,11,0.3); }
         
         #poster-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 9999; flex-direction: column; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
         #poster-preview { width: 85%; max-height: 70vh; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); object-fit: contain; }
@@ -122,10 +127,16 @@
                 <input type="password" id="api-token-input" placeholder="API Token (Bearer Token)"
                        style="font-size: 14px;" onblur="window.saveApiConfig()">
             </div>
-            <div class="input-group">
-                <input type="text" id="event-sku-input" placeholder="赛事 SKU (如 RE-VIQRC-26-5508)"
-                       style="font-size: 14px; text-transform: uppercase;" onblur="window.saveApiConfig()">
+            <div id="sku-inputs-container">
+                <div class="sku-row">
+                    <input type="text" class="event-sku-input" placeholder="赛事 SKU (如 RE-VIQRC-26-5508)"
+                           style="font-size: 14px; text-transform: uppercase;" onblur="window.saveApiConfig()">
+                </div>
             </div>
+            <button type="button" id="add-sku-btn" onclick="window.addSkuInput()"
+                    style="background:#f0f9ff; color:#0284c7; border:1px dashed #0284c7; padding:8px 12px; border-radius:8px; font-size:13px; font-weight:bold; cursor:pointer; width:100%; margin-top:4px;">
+                + 添加赛事 SKU
+            </button>
             <button id="sync-cloud-btn" class="btn-primary" 
                     style="background: #3b82f6; width: 100%; margin-top: 8px;"
                     onclick="window.syncCloudScores()">
@@ -226,15 +237,16 @@
         let currentViewTeam = localStorage.getItem('vex_current_team') || ""; 
         let scoresDb = JSON.parse(localStorage.getItem('vex_scores')) || {};      
         let doneDb = JSON.parse(localStorage.getItem('vex_done')) || {};
+        let rankingsDb = JSON.parse(localStorage.getItem('vex_rankings')) || {};
         let currentDivFilter = 'All'; 
         let isHideDone = false; 
 
         document.addEventListener('DOMContentLoaded', function() {
             const countEl = document.getElementById('total-matches-count');
             if (countEl) countEl.innerText = globalMatches ? globalMatches.length : 0;
+            rankingsDb = JSON.parse(localStorage.getItem('vex_rankings')) || {};
             if (myTeams && myTeams.length > 0) window.updateTeamUI();
             window.updateDivisionFilterUI();
-            // 加载云端同步配置
             window.loadApiConfig();
         });
 
@@ -249,7 +261,7 @@
         window.clearAllData = function() {
             if (confirm("⚠️ 确定要清空所有数据吗？这将删除所有排表和比分！")) {
                 localStorage.clear();
-                globalMatches = []; myTeams = []; currentViewTeam = ""; scoresDb = {}; doneDb = {};
+                globalMatches = []; myTeams = []; currentViewTeam = ""; scoresDb = {}; doneDb = {}; rankingsDb = {};
                 currentDivFilter = 'All';
                 document.getElementById('total-matches-count').innerText = "0";
                 window.updateTeamUI();
@@ -265,23 +277,60 @@
         /**
          * 保存 API 配置到 LocalStorage
          */
-        window.saveApiConfig = function() {
-            const token = document.getElementById('api-token-input').value.trim();
-            const sku = document.getElementById('event-sku-input').value.trim();
-            localStorage.setItem('vex_api_token', token);
-            localStorage.setItem('vex_event_sku', sku);
-            console.log('[CloudSync] API 配置已保存');
+        window.addSkuInput = function(value) {
+            const container = document.getElementById('sku-inputs-container');
+            const row = document.createElement('div');
+            row.className = 'sku-row';
+            row.innerHTML = `<input type="text" class="event-sku-input" placeholder="赛事 SKU (如 RE-VIQRC-26-5508)" style="font-size: 14px; text-transform: uppercase;" onblur="window.saveApiConfig()" value="${value || ''}">`;
+            container.appendChild(row);
+            const input = row.querySelector('input');
+            if (!value) input.focus();
+            return input;
         }
 
-        /**
-         * 从 LocalStorage 加载 API 配置
-         */
+        window.removeSkuInput = function(btn) {
+            const container = document.getElementById('sku-inputs-container');
+            if (container.children.length <= 1) { alert('至少保留一个赛事 SKU 输入框'); return; }
+            btn.parentElement.remove();
+            window.saveApiConfig();
+        }
+
+        window.getSkuList = function() {
+            const inputs = document.querySelectorAll('.event-sku-input');
+            const skus = [];
+            inputs.forEach(input => {
+                const val = input.value.trim();
+                if (val && !skus.includes(val)) skus.push(val);
+            });
+            return skus;
+        }
+
+        window.saveApiConfig = function() {
+            const token = document.getElementById('api-token-input').value.trim();
+            const skus = window.getSkuList();
+            localStorage.setItem('vex_api_token', token);
+            localStorage.setItem('vex_event_sku', JSON.stringify(skus));
+            console.log('[CloudSync] API 配置已保存:', skus.length, '个 SKU');
+        }
+
         window.loadApiConfig = function() {
             const token = localStorage.getItem('vex_api_token') || '';
-            const sku = localStorage.getItem('vex_event_sku') || '';
+            const skuRaw = localStorage.getItem('vex_event_sku') || '';
             document.getElementById('api-token-input').value = token;
-            document.getElementById('event-sku-input').value = sku;
-            console.log('[CloudSync] API 配置已加载');
+            const container = document.getElementById('sku-inputs-container');
+            let skuList = [];
+            try { const parsed = JSON.parse(skuRaw); if (Array.isArray(parsed)) skuList = parsed; } catch (e) { if (skuRaw) skuList = [skuRaw]; }
+            skuList = skuList.filter(s => s && s.trim());
+            container.innerHTML = '';
+            if (skuList.length === 0) {
+                const row = document.createElement('div');
+                row.className = 'sku-row';
+                row.innerHTML = '<input type="text" class="event-sku-input" placeholder="赛事 SKU (如 RE-VIQRC-26-5508)" style="font-size: 14px; text-transform: uppercase;" onblur="window.saveApiConfig()">';
+                container.appendChild(row);
+            } else {
+                skuList.forEach(sku => window.addSkuInput(sku));
+            }
+            console.log('[CloudSync] API 配置已加载:', skuList.length, '个 SKU');
         }
 
         /**
@@ -291,70 +340,39 @@
             const btn = document.getElementById('sync-cloud-btn');
             const statusMsg = document.getElementById('sync-status-msg');
             const originalText = btn.innerText;
-
-            // 取出本地存好的 SKU 和 Token
-            const sku = document.getElementById('event-sku-input').value.trim();
             const token = document.getElementById('api-token-input').value.trim();
-
-            // 若为空则提示用户填写
-            if (!sku) {
-                alert('请先填写赛事 SKU');
-                return;
-            }
-            if (!token) {
-                alert('请先填写 API Token');
-                return;
-            }
-
-            // 将按钮文字变更为“同步中...”并禁用按钮
+            const skuList = window.getSkuList();
+            if (skuList.length === 0) { alert('请先填写赛事 SKU'); return; }
+            if (!token) { alert('请先填写 API Token'); return; }
             btn.innerText = '同步中...';
             btn.disabled = true;
             statusMsg.style.display = 'block';
-            statusMsg.innerText = '正在连接云端...';
             statusMsg.style.color = '#f59e0b';
-
-            try {
-                // 调用同步函数
-                const result = await VexApiSync.runFullSync(sku, token);
-
-                // 根据返回结果弹出提示
-                if (result.success) {
-                    statusMsg.innerText = result.message;
-                    statusMsg.style.color = '#10b981';
-                    alert(result.message);
-
-                    // 重新读取全局变量
-                    const savedMatches = localStorage.getItem('vex_matches');
-                    if (savedMatches) globalMatches = JSON.parse(savedMatches);
-                    const savedScores = localStorage.getItem('vex_scores');
-                    if (savedScores) scoresDb = JSON.parse(savedScores);
-                    const savedDone = localStorage.getItem('vex_done');
-                    if (savedDone) doneDb = JSON.parse(savedDone);
-
-                    // 更新统计数字
-                    const countEl = document.getElementById('total-matches-count');
-                    if (countEl) countEl.innerText = globalMatches.length;
-
-                    // 重新渲染页面
-                    window.saveData();
-                    window.updateTeamUI();
-                    window.updateDivisionFilterUI();
-                    if (window.renderMasterTimeline) window.renderMasterTimeline();
-                    if (window.renderSingleTeam) window.renderSingleTeam();
-                } else {
-                    statusMsg.innerText = result.message;
-                    statusMsg.style.color = '#ef4444';
-                    alert(result.message);
-                }
-            } catch (error) {
-                statusMsg.innerText = '同步失败: ' + error.message;
-                statusMsg.style.color = '#ef4444';
-                alert('同步失败: ' + error.message);
-            } finally {
-                // 恢复按钮状态
-                btn.innerText = originalText;
-                btn.disabled = false;
+            let totalUpdated = 0;
+            let errorMessages = [];
+            for (let i = 0; i < skuList.length; i++) {
+                const sku = skuList[i];
+                statusMsg.innerText = skuList.length > 1 ? `同步中 (${i + 1}/${skuList.length}): ${sku}...` : '正在连接云端...';
+                try {
+                    const result = await VexApiSync.runFullSync(sku, token);
+                    if (result.success) { totalUpdated += result.count; } else { errorMessages.push(`${sku}: ${result.message}`); }
+                } catch (error) { errorMessages.push(`${sku}: ${error.message}`); }
             }
+            const savedScores = localStorage.getItem('vex_scores');
+            scoresDb = savedScores ? JSON.parse(savedScores) : {};
+            const savedDone = localStorage.getItem('vex_done');
+            doneDb = savedDone ? JSON.parse(savedDone) : {};
+            const savedRankings = localStorage.getItem('vex_rankings');
+            rankingsDb = savedRankings ? JSON.parse(savedRankings) : {};
+            window.saveData(); window.updateTeamUI(); window.updateDivisionFilterUI();
+            if (window.renderMasterTimeline) window.renderMasterTimeline();
+            if (window.renderSingleTeam) window.renderSingleTeam();
+            let msg = `同步完成，共更新 ${totalUpdated} 条比分记录`;
+            if (errorMessages.length > 0) msg += `\n\n失败项:\n${errorMessages.join('\n')}`;
+            statusMsg.innerText = `同步完成，共更新 ${totalUpdated} 条比分记录`;
+            statusMsg.style.color = errorMessages.length > 0 ? '#f59e0b' : '#10b981';
+            alert(msg);
+            btn.innerText = originalText; btn.disabled = false;
         }
 
         /**
@@ -364,102 +382,55 @@
             const btn = document.getElementById('pull-schedule-btn');
             const statusMsg = document.getElementById('sync-status-msg');
             const originalText = btn.innerText;
-
-            // 取出本地存好的 SKU 和 Token
-            const sku = document.getElementById('event-sku-input').value.trim();
             const token = document.getElementById('api-token-input').value.trim();
-
-            // 若为空则提示用户填写
-            if (!sku) {
-                alert('请先填写赛事 SKU');
-                return;
+            const skuList = window.getSkuList();
+            if (skuList.length === 0) { alert('请先填写赛事 SKU'); return; }
+            if (!token) { alert('请先填写 API Token'); return; }
+            btn.innerText = '拉取中...'; btn.disabled = true;
+            statusMsg.style.display = 'block'; statusMsg.style.color = '#f59e0b';
+            let allMatchesData = []; let errorMessages = [];
+            for (let i = 0; i < skuList.length; i++) {
+                const sku = skuList[i];
+                try {
+                    statusMsg.innerText = `(${i + 1}/${skuList.length}) 获取赛事信息: ${sku}...`;
+                    const eventInfo = await VexApiSync.fetchEventId(sku, token);
+                    for (const div of eventInfo.divisions) {
+                        statusMsg.innerText = `(${i + 1}/${skuList.length}) ${div.name} 赛程数据...`;
+                        const matches = await VexApiSync.fetchMatchesData(eventInfo.id, div.id, token);
+                        const divLabel = window.VexApiSync.formatDivisionName(eventInfo.name, div.name);
+                        matches.forEach(m => { m._divisionName = divLabel; });
+                        allMatchesData = allMatchesData.concat(matches);
+                        try { const rankings = await VexApiSync.fetchRankings(eventInfo.id, div.id, token); VexApiSync.mergeRankingsToLocalStorage(rankings); } catch (e) { console.error('[PullSchedule] 排名获取失败:', e.message); }
+                    }
+                } catch (error) { errorMessages.push(`${sku}: ${error.message}`); console.error(`[PullSchedule] ${sku} 拉取失败:`, error.message); }
             }
-            if (!token) {
-                alert('请先填写 API Token');
-                return;
+            if (allMatchesData.length === 0) {
+                const msg = errorMessages.length > 0 ? `所有赛事拉取失败:\n${errorMessages.join('\n')}` : '未获取到任何比赛数据';
+                statusMsg.innerText = msg; statusMsg.style.color = '#ef4444'; alert(msg);
+                btn.innerText = originalText; btn.disabled = false; return;
             }
-
-            // 将按钮文字变更为“拉取中...”并禁用按钮
-            btn.innerText = '拉取中...';
-            btn.disabled = true;
-            statusMsg.style.display = 'block';
-            statusMsg.innerText = '正在从云端拉取完整赛程...';
-            statusMsg.style.color = '#f59e0b';
-
-            try {
-                // 1. 获取赛事 ID
-                statusMsg.innerText = '步骤 1/3: 获取赛事 ID...';
-                const eventId = await VexApiSync.fetchEventId(sku, token);
-
-                // 2. 获取完整赛程
-                statusMsg.innerText = '步骤 2/3: 获取完整赛程...';
-                const matches = await VexApiSync.fetchMatchesData(eventId, token);
-
-                // 3. 生成本地赛程并更新比分
-                statusMsg.innerText = '步骤 3/3: 生成本地赛程...';
-                const count = VexApiSync.generateScheduleFromApi(matches);
-
-                // 成功提示
-                const msg = `拉取成功，共生成 ${count} 场比赛`;
-                statusMsg.innerText = msg;
-                statusMsg.style.color = '#10b981';
-                alert(msg);
-
-                // 修复状态同步问题：重新读取全局变量
-                // 1. 重新读取全局变量 globalMatches
-                const savedMatches = localStorage.getItem('vex_matches');
-                if (savedMatches) {
-                    globalMatches = JSON.parse(savedMatches);
-                    console.log('[PullSchedule] 重新读取 globalMatches:', globalMatches.length, '场');
-                }
-
-                // 2. 重新读取比分数据 scoresDb
-                const savedScores = localStorage.getItem('vex_scores');
-                if (savedScores) {
-                    scoresDb = JSON.parse(savedScores);
-                    console.log('[PullSchedule] 重新读取 scoresDb:', Object.keys(scoresDb).length, '条');
-                } else {
-                    scoresDb = {};
-                }
-
-                // 3. 重新读取完赛状态 doneDb
-                const savedDone = localStorage.getItem('vex_done');
-                if (savedDone) {
-                    doneDb = JSON.parse(savedDone);
-                    console.log('[PullSchedule] 重新读取 doneDb:', Object.keys(doneDb).length, '条');
-                } else {
-                    doneDb = {};
-                }
-
-                // 4. 更新导入页的数字统计
-                const countEl = document.getElementById('total-matches-count');
-                if (countEl) {
-                    countEl.innerText = globalMatches.length;
-                    console.log('[PullSchedule] 更新统计数字:', globalMatches.length);
-                }
-
-                // 5. 强制清除旧的队伍缓存
-                myTeams = [];
-                currentViewTeam = '';
-                console.log('[PullSchedule] 已清空旧的队伍缓存');
-
-                // 6. 触发全量渲染
-                window.saveData();
-                window.updateTeamUI();
-                window.updateDivisionFilterUI();
-                if (window.renderMasterTimeline) window.renderMasterTimeline();
-                if (window.renderSingleTeam) window.renderSingleTeam();
-                console.log('[PullSchedule] 全量渲染完成');
-
-            } catch (error) {
-                statusMsg.innerText = '拉取失败: ' + error.message;
-                statusMsg.style.color = '#ef4444';
-                alert('拉取失败: ' + error.message);
-            } finally {
-                // 恢复按钮状态
-                btn.innerText = originalText;
-                btn.disabled = false;
-            }
+            statusMsg.innerText = `正在生成本地赛程 (${allMatchesData.length} 场)...`;
+            const count = VexApiSync.generateScheduleFromApi(allMatchesData);
+            const savedMatches = localStorage.getItem('vex_matches');
+            if (savedMatches) globalMatches = JSON.parse(savedMatches);
+            const savedScores = localStorage.getItem('vex_scores');
+            scoresDb = savedScores ? JSON.parse(savedScores) : {};
+            const savedDone = localStorage.getItem('vex_done');
+            doneDb = savedDone ? JSON.parse(savedDone) : {};
+            const savedRankings = localStorage.getItem('vex_rankings');
+            rankingsDb = savedRankings ? JSON.parse(savedRankings) : {};
+            const countEl = document.getElementById('total-matches-count');
+            if (countEl) countEl.innerText = globalMatches.length;
+            myTeams = []; currentViewTeam = '';
+            window.saveData(); window.updateTeamUI(); window.updateDivisionFilterUI();
+            if (window.renderMasterTimeline) window.renderMasterTimeline();
+            if (window.renderSingleTeam) window.renderSingleTeam();
+            let msg = `拉取成功！聚合 ${skuList.length} 个赛事，共生成 ${count} 场比赛`;
+            if (errorMessages.length > 0) msg += `\n\n失败项:\n${errorMessages.join('\n')}`;
+            statusMsg.innerText = `拉取成功，共生成 ${count} 场比赛`;
+            statusMsg.style.color = errorMessages.length > 0 ? '#f59e0b' : '#10b981';
+            alert(msg);
+            btn.innerText = originalText; btn.disabled = false;
         }
 
         function parseTimeToMinutes(timeStr) {
@@ -792,14 +763,17 @@
             const teamMatches = globalMatches.filter(m => m.team1 === currentViewTeam || m.team2 === currentViewTeam);
             teamMatches.sort((a, b) => a.timeValue - b.timeValue);
 
+            const rank = rankingsDb[currentViewTeam];
+            const rankBadge = rank ? `<span class="team-rank">\ud83c\udfc5 排名: ${rank}</span>` : '';
             let html = `
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 15px; padding: 0 5px;">
-                    <div>
+                    <div style="display:flex; align-items:center;">
                         <h2 style="margin:0; font-size:24px; color:#111;">${currentViewTeam}</h2>
-                        <span style="font-size:12px; color:#888;">本次赛事共 ${teamMatches.length} 场</span>
+                        ${rankBadge}
                     </div>
                     <button id="gen-poster-btn" class="btn-poster" onclick="window.generatePoster()">生成分享海报</button>
                 </div>
+                <div style="font-size:12px; color:#888; margin-bottom: 10px; padding: 0 5px;">本次赛事共 ${teamMatches.length} 场</div>
             `;
 
             teamMatches.forEach(m => {

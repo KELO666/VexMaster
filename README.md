@@ -1,8 +1,8 @@
-# VEX 赛程管理助手 (VEX Schedule Master) v2.0
+# VEX 赛程管理助手 (VEX Schedule Master) v2.1
 
 一款专为 VEX 机器人竞赛教练和队员设计的硬核赛程管理工具。支持 **Android 原生 App** 和 **iOS/PWA** 双端，采用"主干隔离，双线分支"的维护模式。
 
-> **v2.0 新版亮点**：从纯本地 PDF 解析，进化为 **"API 直连 + 本地兜底"** 双模式驱动，彻底告别微信群找 PDF 的繁琐。
+> **v2.1 新版亮点**：在 v2.0 云端双模基础上，新增 **多赛事并发聚合**、**极简排名静默抓取**、**智能赛区净化** 三大核心特性。
 
 ---
 
@@ -33,6 +33,30 @@
 - 点击 **「🔄 云端同步比分」** 按钮，自动拉取最新比分
 - 智能匹配本地场次号（Q1, Q2...），安全合并到本地数据库
 - UI 瞬间刷新，大师总表和单队视图同步更新
+
+### 🔥 多赛事并发聚合 (v2.1 新特性)
+
+同一场 VEX 赛事通常分为初中组和小学组（分别对应不同 SKU），本版本支持动态添加多个 SKU：
+
+- 点击 **「+ 添加赛事 SKU」** 按钮，自由增减 SKU 输入框
+- 输入多个 SKU 后点击同步/拉取，自动遍历所有赛事并聚合为一张总表
+- 单个 SKU 失败不影响其他 SKU 拉取，错误信息汇总展示
+
+### 📊 极简排名静默抓取 (v2.1 新特性)
+
+云端同步时自动抓取队伍官方排名数据：
+
+- 同步/拉取过程中静默抓取每个赛区的排名信息
+- 排名数据存储在 `vex_rankings` / `vex_rankings_ios` 中
+- 单队视图中，在队伍号旁显示 **🏅 排名: N** 金黄色渐变徽章
+
+### ✨ 智能赛区净化 (v2.1 新特性)
+
+自动遍历赛事下的所有子赛区（如 Division A, Division 1, Final）：
+
+- `fetchEventId` 返回完整赛区列表，不再硬编码 `divisions/1`
+- 赛区名称通过 `formatDivisionName` 正则提炼，如 `小学组 A区`、`初中组 1区`
+- 下拉菜单呈现极简格式，不再溢出
 
 ### 📶 离线容灾兜底
 
@@ -126,7 +150,7 @@ Android 端使用了 H5+ 专属 API（如 `plus.gallery.save` 直接保存海报
 | CDN 节点 | cdn.staticfile.net | lib.baomitu.com |
 | 海报保存 | plus.gallery.save (直接写入相册) | 引导用户长按保存 |
 | 键盘适配 | 无 | focusout 防回弹留白 |
-| API 存储 Key | `vex_matches` / `vex_scores` | `vex_matches_ios` / `vex_scores_ios` |
+| API 存储 Key | `vex_matches` / `vex_scores` / `vex_rankings` | `vex_matches_ios` / `vex_scores_ios` / `vex_rankings_ios` |
 
 ---
 
