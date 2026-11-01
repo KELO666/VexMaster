@@ -71,13 +71,20 @@
     if (!divisionId || typeof divisionId !== 'number') throw new Error('DivisionId 参数无效');
     if (!token || typeof token !== 'string') throw new Error('Token 参数无效');
     try {
-      const url = `${API_BASE}/events/${eventId}/divisions/${divisionId}/rankings`;
-      const response = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` } });
-      if (!response.ok) { const errorText = await response.text(); throw new Error(`HTTP ${response.status}: ${errorText}`); }
-      const data = await response.json();
-      const rankings = (data && data.data && Array.isArray(data.data)) ? data.data : [];
-      logSuccess(`赛区 ${divisionId} 排名获取完成: ${rankings.length} 条`);
-      return rankings;
+      // 排名接口与比赛接口一样分页返回，必须翻页，否则丢第 2 页之后的队伍
+      let allRankings = []; let currentPage = 1; let lastPage = 1;
+      do {
+        const url = `${API_BASE}/events/${eventId}/divisions/${divisionId}/rankings?page=${currentPage}`;
+        const response = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` } });
+        if (!response.ok) { const errorText = await response.text(); throw new Error(`HTTP ${response.status}: ${errorText}`); }
+        const data = await response.json();
+        if (!data || !data.data || !Array.isArray(data.data)) break;
+        allRankings = allRankings.concat(data.data);
+        if (data.meta && data.meta.last_page) lastPage = data.meta.last_page;
+        currentPage++;
+      } while (currentPage <= lastPage);
+      logSuccess(`赛区 ${divisionId} 排名获取完成: ${allRankings.length} 条`);
+      return allRankings;
     } catch (e) { logError(`赛区 ${divisionId} 排名获取失败:`, e.message); return []; }
   }
 
@@ -116,16 +123,87 @@
     return updatedCount;
   }
 
-  function mergeRankingsToLocalStorage(apiRankingsData) {
+  // 队伍号 -> 库中当前排名来源赛区的队伍总数（多赛区冲突仲裁用）
+  const rankSourceSize = {};
+
+  // 与外部 vex-api-sync.js 保持同步的排名合并（v2.2: 新增分区官方榜单存储）
+  function mergeRankingsToLocalStorage(apiRankingsData, divisionName) {
     if (!apiRankingsData || !Array.isArray(apiRankingsData)) return;
     let rankingsDb = {};
     try { const existing = localStorage.getItem('vex_rankings_ios'); if (existing) rankingsDb = JSON.parse(existing); } catch (e) {}
+    // 只信任 entry.rank；rankingsort1 是排序积分值不是名次，不能当排名兜底
+    const parsed = [];
     for (const entry of apiRankingsData) {
-      const teamName = entry.team ? entry.team.name : (entry.team_name || '');
-      const rank = entry.rank || entry.rankingsort1 || 0;
-      if (teamName && rank > 0) rankingsDb[teamName] = rank;
+      const teamName = (entry.team && entry.team.name) || entry.team_name || '';
+      const rank = parseInt(entry.rank, 10);
+      if (teamName && Number.isFinite(rank) && rank > 0) parsed.push({ teamName, rank });
     }
-    try { localStorage.setItem('vex_rankings_ios', JSON.stringify(rankingsDb)); logSuccess(`排名合并完成: ${Object.keys(rankingsDb).length} 条`); } catch (e) { logError('写入排名失败:', e); }
+    // 同一队伍在多个赛区有排名时（如 Division A + Final），保留队伍数更多的大赛区排名
+    for (const p of parsed) {
+      const sourceSize = rankSourceSize[p.teamName];
+      if (sourceSize === undefined || parsed.length >= sourceSize) {
+        rankingsDb[p.teamName] = p.rank;
+        rankSourceSize[p.teamName] = parsed.length;
+      }
+    }
+    try { localStorage.setItem('vex_rankings_ios', JSON.stringify(rankingsDb)); logSuccess(`排名合并完成: 本次 ${parsed.length} 条, 库中 ${Object.keys(rankingsDb).length} 条`); } catch (e) { logError('写入排名失败:', e); }
+
+    // 分区官方榜单: 整分区排名明细存 vex_rankings_detail_ios，每次同步整赛区覆盖（实时刷新）
+    // 平均分取值: average_points (官方 Avg. Points) > avg_score > average > rankingsort1
+    if (divisionName) {
+      let nameMap = {};
+      try { nameMap = JSON.parse(localStorage.getItem('vex_team_names_ios')) || {}; } catch (e) { nameMap = {}; }
+      const standings = [];
+      for (const entry of apiRankingsData) {
+        const team = (entry.team && entry.team.name) || entry.team_name || '';
+        const rank = parseInt(entry.rank, 10);
+        if (!team || !Number.isFinite(rank) || rank <= 0) continue;
+        const avgRaw = (entry.average_points !== undefined && entry.average_points !== null) ? entry.average_points
+          : (entry.avg_score !== undefined && entry.avg_score !== null) ? entry.avg_score
+          : (entry.average !== undefined && entry.average !== null) ? entry.average
+          : entry.rankingsort1;
+        const avg = parseFloat(avgRaw);
+        standings.push({ rank, team, name: nameMap[team] || '', avg: Number.isFinite(avg) ? avg : null });
+      }
+      standings.sort((a, b) => a.rank - b.rank);
+      let detail = {};
+      try { detail = JSON.parse(localStorage.getItem('vex_rankings_detail_ios')) || {}; } catch (e) { detail = {}; }
+      detail[divisionName] = standings;
+      try { localStorage.setItem('vex_rankings_detail_ios', JSON.stringify(detail)); logSuccess(`分区榜单已更新: ${divisionName} (${standings.length} 队)`); } catch (e) { logError('写入分区榜单失败:', e); }
+    }
+  }
+
+  // 拉取赛事全部队伍（自动分页），返回 { 队号: 队名 }；排名接口不含队名，队名只能从这里拿
+  async function fetchTeamNames(eventId, token) {
+    if (!eventId || typeof eventId !== 'number') throw new Error('EventId 参数无效');
+    if (!token || typeof token !== 'string') throw new Error('Token 参数无效');
+    const nameMap = {};
+    let currentPage = 1, lastPage = 1;
+    try {
+      do {
+        const response = await fetch(`${API_BASE}/events/${eventId}/teams?page=${currentPage}`, { method: 'GET', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` } });
+        if (!response.ok) { const errorText = await response.text(); throw new Error(`HTTP ${response.status}: ${errorText}`); }
+        const data = await response.json();
+        if (!data || !data.data || !Array.isArray(data.data)) break;
+        for (const t of data.data) { if (t && t.number) nameMap[t.number] = t.team_name || t.organization || ''; }
+        if (data.meta && data.meta.last_page) lastPage = data.meta.last_page;
+        currentPage++;
+      } while (currentPage <= lastPage);
+      logSuccess(`队伍名称获取完成: ${Object.keys(nameMap).length} 队`);
+      return nameMap;
+    } catch (error) {
+      logError(`队伍名称获取失败: ${error.message}`);
+      return {};
+    }
+  }
+
+  // 队名映射合并入库（多赛事累积 merge）
+  function mergeTeamNamesToLocalStorage(apiNameMap) {
+    if (!apiNameMap || typeof apiNameMap !== 'object') return;
+    let nameMap = {};
+    try { nameMap = JSON.parse(localStorage.getItem('vex_team_names_ios')) || {}; } catch (e) { nameMap = {}; }
+    Object.assign(nameMap, apiNameMap);
+    try { localStorage.setItem('vex_team_names_ios', JSON.stringify(nameMap)); logSuccess(`队名映射已入库: 共 ${Object.keys(nameMap).length} 队`); } catch (e) { logError('写入队名映射失败:', e); }
   }
 
   function formatDivisionName(eventName, divName) {
@@ -151,12 +229,13 @@
     if (!token || token.trim() === '') return { success: false, count: 0, message: 'Token 参数无效' };
     try {
       const eventInfo = await fetchEventId(sku, token);
+      try { mergeTeamNamesToLocalStorage(await fetchTeamNames(eventInfo.id, token)); } catch (e) { logError('队名抓取失败:', e.message); }
       let allMatches = [];
       for (const div of eventInfo.divisions) {
         const matches = await fetchMatchesData(eventInfo.id, div.id, token);
         matches.forEach(m => { m._divisionName = formatDivisionName(eventInfo.name, div.name); });
         allMatches = allMatches.concat(matches);
-        try { const rankings = await fetchRankings(eventInfo.id, div.id, token); mergeRankingsToLocalStorage(rankings); } catch (e) { logError(`赛区 ${div.name} 排名失败:`, e.message); }
+        try { const rankings = await fetchRankings(eventInfo.id, div.id, token); mergeRankingsToLocalStorage(rankings, formatDivisionName(eventInfo.name, div.name)); } catch (e) { logError(`赛区 ${div.name} 排名失败:`, e.message); }
       }
       const count = syncScoresToLocal(allMatches);
       return { success: true, count, message: `同步成功，共 ${eventInfo.divisions.length} 个赛区，更新了 ${count} 条比分记录` };
@@ -206,7 +285,7 @@
     return newGlobalMatches.length;
   }
 
-  window.VexApiSync = { fetchEventId, fetchMatchesData, fetchRankings, syncScoresToLocal, mergeRankingsToLocalStorage, runFullSync, generateScheduleFromApi, formatDivisionName };
+  window.VexApiSync = { fetchEventId, fetchMatchesData, fetchRankings, fetchTeamNames, mergeTeamNamesToLocalStorage, syncScoresToLocal, mergeRankingsToLocalStorage, runFullSync, generateScheduleFromApi, formatDivisionName };
   log('API 通信模块已加载 (多赛区+排名版)');
 })();
     </script>
@@ -301,9 +380,6 @@
         .tab-item.active { color: var(--primary); }
         .tab-icon { font-size: 22px; }
 
-        .fab-locate { position: fixed; bottom: calc(85px + env(safe-area-inset-bottom)); right: 20px; width: 48px; height: 48px; background: #f59e0b; color: white; border-radius: 50%; display: none; justify-content: center; align-items: center; font-size: 22px; box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4); border: none; cursor: pointer; z-index: 1000; transition: transform 0.2s; }
-        .fab-locate:active { transform: scale(0.9); }
-
         .btn-poster { background: linear-gradient(135deg, #3b82f6, #8b5cf6); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 10px rgba(59,130,246,0.3); }
         .btn-poster:active { transform: scale(0.95); }
         .team-rank { display: inline-flex; align-items: center; gap: 3px; background: linear-gradient(135deg, #f59e0b, #d97706); color: white; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 800; margin-left: 8px; box-shadow: 0 2px 6px rgba(245,158,11,0.3); }
@@ -395,25 +471,19 @@
     <div id="page-master" class="page">
         <div class="card" style="padding-bottom: 10px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                <span style="font-weight: bold; font-size: 15px; color: #555;">队伍与赛区</span>
-                <div style="display: flex; gap: 8px; align-items: center;">
-                    <button id="toggle-done-btn" onclick="window.toggleHideDone()" style="background:#f1f5f9; color:#64748b; border:none; padding:6px 10px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer; transition:all 0.2s;">隐藏已赛</button>
-                    <select id="division-filter" onchange="window.changeDivisionFilter(this.value)" style="padding: 4px 8px; border-radius: 6px; border: 1px solid #ccc; font-size: 13px; background: #fff; max-width: 110px; outline: none;">
-                        <option value="All">全部赛区</option>
-                    </select>
-                </div>
+                <span style="font-weight: bold; font-size: 15px; color: #555;">赛区排行榜</span>
+                <select id="division-filter" onchange="window.changeDivisionFilter(this.value)" style="padding: 4px 8px; border-radius: 6px; border: 1px solid #ccc; font-size: 13px; background: #fff; max-width: 110px; outline: none;">
+                    <option value="All">全部赛区</option>
+                </select>
             </div>
-            <div class="team-tags" id="master-filter-container" style="margin-bottom:0;"></div>
         </div>
-        
+
         <div class="card" style="padding: 0; background: transparent; box-shadow: none;">
-            <div id="master-timeline" style="background: white; border-radius: 12px; padding: 10px 16px;">
-                <div style="text-align:center;color:#aaa;padding:30px;">暂无日程</div>
+            <div id="leaderboard-list" style="background: white; border-radius: 12px; padding: 10px 16px;">
+                <div style="text-align:center;color:#aaa;padding:30px;">暂无数据</div>
             </div>
         </div>
     </div>
-
-    <button class="fab-locate" id="fab-locate" onclick="window.locateCurrentMatch()">🎯</button>
 
     <div id="poster-modal">
         <div class="poster-close" onclick="document.getElementById('poster-modal').style.display='none'">×</div>
@@ -438,8 +508,8 @@
         <div class="tab-item" onclick="window.switchTab('single', '单队视图', this)">
             <div class="tab-icon">📋</div><div>单队</div>
         </div>
-        <div class="tab-item" onclick="window.switchTab('master', '大师总表', this)">
-            <div class="tab-icon">⏱️</div><div>总表</div>
+        <div class="tab-item" onclick="window.switchTab('master', '赛区排行榜', this)">
+            <div class="tab-icon">🏆</div><div>排行</div>
         </div>
     </div>
 
@@ -459,17 +529,19 @@
         let scoresDb = JSON.parse(localStorage.getItem('vex_scores_ios')) || {};      
         let doneDb = JSON.parse(localStorage.getItem('vex_done_ios')) || {};
         let rankingsDb = JSON.parse(localStorage.getItem('vex_rankings_ios')) || {};
-        let currentDivFilter = 'All'; 
-        let isHideDone = false; 
+        let rankingsDetailDb = JSON.parse(localStorage.getItem('vex_rankings_detail_ios')) || {}; // 分区官方榜单 {赛区名: [{rank,team,name,avg}]}
+        let currentDivFilter = 'All';
 
         document.addEventListener('DOMContentLoaded', function() {
             const countEl = document.getElementById('total-matches-count');
             if (countEl) countEl.innerText = globalMatches ? globalMatches.length : 0;
             rankingsDb = JSON.parse(localStorage.getItem('vex_rankings_ios')) || {};
+            rankingsDetailDb = JSON.parse(localStorage.getItem('vex_rankings_detail_ios')) || {};
             if (myTeams && myTeams.length > 0) window.updateTeamUI();
             window.updateDivisionFilterUI();
             // 加载云端同步配置
             window.loadApiConfig();
+            window.renderLeaderboard();
         });
 
         window.saveData = function() {
@@ -483,7 +555,7 @@
         window.clearAllData = function() {
             if (confirm("⚠️ 确定要清空所有数据吗？这将删除所有排表和比分！")) {
                 localStorage.clear();
-                globalMatches = []; myTeams = []; currentViewTeam = ""; scoresDb = {}; doneDb = {}; rankingsDb = {};
+                globalMatches = []; myTeams = []; currentViewTeam = ""; scoresDb = {}; doneDb = {}; rankingsDb = {}; rankingsDetailDb = {};
                 currentDivFilter = 'All';
                 document.getElementById('total-matches-count').innerText = "0";
                 window.updateTeamUI();
@@ -624,11 +696,13 @@
             doneDb = savedDone ? JSON.parse(savedDone) : {};
             const savedRankings = localStorage.getItem('vex_rankings_ios');
             rankingsDb = savedRankings ? JSON.parse(savedRankings) : {};
+            const savedRankingsDetail = localStorage.getItem('vex_rankings_detail_ios');
+            rankingsDetailDb = savedRankingsDetail ? JSON.parse(savedRankingsDetail) : {};
 
             window.saveData();
             window.updateTeamUI();
             window.updateDivisionFilterUI();
-            if (window.renderMasterTimeline) window.renderMasterTimeline();
+            if (window.renderLeaderboard) window.renderLeaderboard();
             if (window.renderSingleTeam) window.renderSingleTeam();
 
             let msg = `同步完成，共更新 ${totalUpdated} 条比分记录`;
@@ -667,6 +741,7 @@
                 try {
                     statusMsg.innerText = `(${i + 1}/${skuList.length}) 获取赛事信息: ${sku}...`;
                     const eventInfo = await VexApiSync.fetchEventId(sku, token);
+                    try { VexApiSync.mergeTeamNamesToLocalStorage(await VexApiSync.fetchTeamNames(eventInfo.id, token)); } catch (e) { console.error('[PullSchedule] 队名抓取失败:', e.message); }
 
                     for (const div of eventInfo.divisions) {
                         statusMsg.innerText = `(${i + 1}/${skuList.length}) ${div.name} 赛程数据...`;
@@ -676,10 +751,10 @@
                         allMatchesData = allMatchesData.concat(matches);
                         console.log(`[PullSchedule] ${sku}/${div.name}: ${matches.length} 场, 累计 ${allMatchesData.length} 场`);
 
-                        // 同步该赛区的排名
+                        // 同步该赛区的排名（含整分区官方榜单）
                         try {
                             const rankings = await VexApiSync.fetchRankings(eventInfo.id, div.id, token);
-                            VexApiSync.mergeRankingsToLocalStorage(rankings);
+                            VexApiSync.mergeRankingsToLocalStorage(rankings, divLabel);
                         } catch (e) { console.error(`[PullSchedule] 排名获取失败:`, e.message); }
                     }
                 } catch (error) {
@@ -712,6 +787,8 @@
             doneDb = savedDone ? JSON.parse(savedDone) : {};
             const savedRankings = localStorage.getItem('vex_rankings_ios');
             rankingsDb = savedRankings ? JSON.parse(savedRankings) : {};
+            const savedRankingsDetail = localStorage.getItem('vex_rankings_detail_ios');
+            rankingsDetailDb = savedRankingsDetail ? JSON.parse(savedRankingsDetail) : {};
 
             const countEl = document.getElementById('total-matches-count');
             if (countEl) countEl.innerText = globalMatches.length;
@@ -722,7 +799,7 @@
             window.saveData();
             window.updateTeamUI();
             window.updateDivisionFilterUI();
-            if (window.renderMasterTimeline) window.renderMasterTimeline();
+            if (window.renderLeaderboard) window.renderLeaderboard();
             if (window.renderSingleTeam) window.renderSingleTeam();
 
             let msg = `拉取成功！聚合 ${skuList.length} 个赛事，共生成 ${count} 场比赛`;
@@ -888,31 +965,7 @@
 
         window.changeDivisionFilter = function(val) {
             currentDivFilter = val;
-            window.renderMasterTimeline();
-        }
-
-        window.toggleHideDone = function() {
-            isHideDone = !isHideDone;
-            const btn = document.getElementById('toggle-done-btn');
-            if (isHideDone) {
-                btn.innerText = '显示已赛';
-                btn.style.background = '#e0f2fe';
-                btn.style.color = '#0284c7';
-            } else {
-                btn.innerText = '隐藏已赛';
-                btn.style.background = '#f1f5f9';
-                btn.style.color = '#64748b';
-            }
-            window.renderMasterTimeline();
-        }
-
-        window.locateCurrentMatch = function() {
-            const currentEl = document.querySelector('.tl-item.next');
-            if (currentEl) {
-                currentEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            } else {
-                alert("当前赛区没有进行中的比赛。");
-            }
+            window.renderLeaderboard();
         }
 
         window.addTeam = function() {
@@ -941,24 +994,18 @@
 
         window.updateTeamUI = function() {
             const myTeamsCont = document.getElementById('my-teams-container');
-            const masterCont = document.getElementById('master-filter-container');
-            if(!myTeamsCont || !masterCont) return;
-            myTeamsCont.innerHTML = ''; masterCont.innerHTML = '';
-            
+            if(!myTeamsCont) return;
+            myTeamsCont.innerHTML = '';
+
             myTeams.forEach(team => {
                 const tag1 = document.createElement('div');
                 tag1.className = `team-tag ${currentViewTeam === team ? 'active' : ''}`;
                 tag1.innerHTML = `<span onclick="window.viewSingleTeam('${team}')">${team}</span> <div class="del" onclick="window.removeTeam('${team}')">✕</div>`;
                 myTeamsCont.appendChild(tag1);
-
-                const tag2 = document.createElement('div');
-                tag2.className = 'team-tag active';
-                tag2.innerText = team;
-                masterCont.appendChild(tag2);
             });
 
             window.renderSingleTeam();
-            window.renderMasterTimeline();
+            window.renderLeaderboard();
         }
 
         window.viewSingleTeam = function(team) {
@@ -970,14 +1017,6 @@
         window.saveScore = function(matchId, team, value) {
             scoresDb[`${matchId}_${team}`] = value;
             window.saveData();
-        }
-
-        window.toggleDone = function(event, matchId, team) {
-            event.stopPropagation(); 
-            const key = `${matchId}_${team}`;
-            doneDb[key] = !doneDb[key];
-            window.saveData();
-            window.renderMasterTimeline();
         }
 
         window.generatePoster = function() {
@@ -1082,94 +1121,122 @@
             container.innerHTML = html;
         }
 
-        window.renderMasterTimeline = function() {
-            const container = document.getElementById('master-timeline');
-            if (myTeams.length === 0) { container.innerHTML = '<div style="text-align:center;color:#aaa;padding:30px;">请先添加队伍</div>'; return; }
+        /**
+         * 分区排行榜 (v2.2.1 重写):
+         * - 优先渲染「官方分区积分榜」(rankingsDetailDb，云端排名接口全量数据，VEX Via 样式)
+         *   每行: 名次 / 队伍号 / 队伍名称 / 官方平均分 —— 与官网 Standings 列一致
+         * - 无官方榜单数据时回退为本地计算版 (从对阵 + 比分推算)
+         * - 右上角切换赛区；「全部赛区」= 各分区榜单依次排列
+         * - 点队伍 → 单队视图查看详细对阵与比分
+         */
+        window.renderLeaderboard = function() {
+            const container = document.getElementById('leaderboard-list');
+            if (!container) return;
 
-            let masterList = [];
-            myTeams.forEach(team => {
-                let matches = globalMatches.filter(m => m.team1 === team || m.team2 === team);
-                matches.forEach(m => {
-                    let mDiv = m.division || '默认赛区';
-                    if (currentDivFilter !== 'All' && mDiv !== currentDivFilter) return;
-
-                    const isRed = (m.team1 === team);
-                    masterList.push({
-                        matchId: m.matchId,
-                        field: m.field,
-                        time: m.time,
-                        timeValue: m.timeValue,
-                        team1: m.team1,
-                        team2: m.team2,
-                        division: m.division,
-                        cleanTime: m.time.replace(/周[一二三四五六日]\s*/, ''), 
-                        myTeam: team,
-                        isRed: isRed,
-                        alliance: isRed ? m.team2 : m.team1,
-                        dbKey: `${m.matchId}_${team}`,
-                        divTag: mDiv
-                    });
-                });
-            });
-
-            masterList.sort((a, b) => a.timeValue - b.timeValue);
-
-            container.innerHTML = '';
-            
-            if (masterList.length === 0) {
-                container.innerHTML = '<div style="text-align:center;color:#aaa;padding:30px;">当前赛区暂无赛程</div>';
+            if (!globalMatches || globalMatches.length === 0) {
+                container.innerHTML = '<div style="text-align:center;color:#aaa;padding:40px;">暂无数据，请先导入赛程或拉取云端赛程</div>';
                 return;
             }
 
-            let nextMatchFound = false;
+            const medals = ['🥇', '🥈', '🥉'];
 
-            masterList.forEach((m) => {
-                const isDone = doneDb[m.dbKey];
-                if (isHideDone && isDone) return;
-
-                const myRoleChar = m.isRed ? "红" : "蓝";
-                const roleClass = m.isRed ? "bg-red" : "bg-blue";
-                const textClass = m.isRed ? "text-red" : "text-blue";
-                
-                let isNext = false;
-                if (!isDone && !nextMatchFound) {
-                    isNext = true;
-                    nextMatchFound = true; 
-                }
-
-                const row = document.createElement('div');
-                row.className = `tl-item ${isDone ? 'done' : ''} ${isNext ? 'next' : ''}`;
-                row.onclick = () => {
-                    window.viewSingleTeam(m.myTeam);
-                    document.querySelectorAll('.tab-item')[1].click(); 
-                };
-                
-                row.innerHTML = `
-                    ${isNext ? '<div class="next-badge">NOW</div>' : ''}
-                    <div class="tl-time">${m.cleanTime}</div>
-                    <div class="tl-content">
-                        <div>
-                            <span class="tl-q">${m.matchId}</span>
-                            <span class="mc-field" style="margin-left:8px;">${m.field}</span>
-                            ${currentDivFilter === 'All' ? `<span class="div-badge">${m.divTag}</span>` : ''}
+            // 官方榜单行渲染: s = { rank, team, name, avg }
+            const officialRow = (s) => {
+                const pos = s.rank <= 3
+                    ? `<span style="font-size:20px;">${medals[s.rank - 1]}</span>`
+                    : `<span style="font-weight:900;color:#f59e0b;font-size:15px;">#${s.rank}</span>`;
+                const avgDisp = (s.avg !== undefined && s.avg !== null) ? Math.round(s.avg) : '—';
+                const active = s.team === currentViewTeam;
+                return `
+                    <div onclick="window.gotoTeamDetail('${s.team}')" style="display:flex; align-items:center; gap:10px; padding:12px 4px; border-bottom:1px solid #f1f5f9; cursor:pointer; ${active ? 'background:#eff6ff;border-radius:8px;' : ''}">
+                        <div style="width:34px; text-align:center; flex-shrink:0;">${pos}</div>
+                        <div style="flex-shrink:0; font-weight:800; font-size:15px; color:#111;">${s.team}</div>
+                        <div style="flex:1; font-size:12px; color:#94a3b8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${s.name || ''}</div>
+                        <div style="text-align:right; flex-shrink:0;">
+                            <div style="font-size:15px; font-weight:800; color:#3b82f6;">${avgDisp}</div>
+                            <div style="font-size:10px; color:#94a3b8;">均分</div>
                         </div>
-                        <div class="tl-row">
-                            <span class="${textClass}" style="font-weight:900;">${m.myTeam}</span>
-                            <span class="badge ${roleClass}" style="padding:0 6px; font-size:11px;">${myRoleChar}</span>
-                            <span style="color:#ccc;">🤝</span>
-                            <span style="color:#444; font-weight:800;">${m.alliance}</span>
-                        </div>
-                    </div>
-                    <div class="checkbox-wrapper">
-                        <input type="checkbox" class="done-check" ${isDone ? 'checked' : ''} onclick="window.toggleDone(event, '${m.matchId}', '${m.myTeam}')">
+                        <div style="color:#cbd5e1; flex-shrink:0;">›</div>
                     </div>
                 `;
-                container.appendChild(row);
-            });
-            
-            if (container.innerHTML === '') {
-                container.innerHTML = '<div style="text-align:center;color:#34c759;padding:40px;font-weight:bold;font-size:16px;">🎉 太棒了，当前列表比赛已全部完成！</div>';
+            };
+
+            // 渲染一个分区的官方榜单 (divName, entries)；rankN 不从 1 开始时补记
+            const officialSection = (divName, entries, showHeader) => {
+                let html = showHeader
+                    ? `<div style="padding:10px 4px 4px; font-size:13px; font-weight:bold; color:#64748b;">${divName}</div>`
+                    : '';
+                entries.forEach(s => { html += officialRow(s); });
+                return html;
+            };
+
+            let html = '';
+
+            if (currentDivFilter !== 'All') {
+                // 单一分区: 有官方榜单直接渲染; 空榜单 (如 Final 未开赛) 给出提示
+                const list = rankingsDetailDb && rankingsDetailDb[currentDivFilter];
+                if (list && list.length > 0) {
+                    html = officialSection(currentDivFilter, list, false);
+                } else {
+                    html = '<div style="text-align:center;color:#aaa;padding:40px;">该赛区暂无官方排名数据（可能尚未开赛）</div>';
+                }
+            } else if (rankingsDetailDb && Object.keys(rankingsDetailDb).length > 0) {
+                // 全部赛区: 各分区官方榜单依次排列
+                Object.keys(rankingsDetailDb).forEach(divName => {
+                    html += officialSection(divName, rankingsDetailDb[divName], true);
+                });
+            } else {
+                // 回退: 无官方榜单时用本地对阵 + 比分推算 (旧逻辑)
+                const divMatches = globalMatches.filter(m => currentDivFilter === 'All' || (m.division || '默认赛区') === currentDivFilter);
+                const teams = [...new Set(divMatches.flatMap(m => [m.team1, m.team2]).filter(t => t && t !== 'TBD'))];
+                const stats = teams.map(team => {
+                    let sum = 0, played = 0;
+                    divMatches.forEach(m => {
+                        if (m.team1 !== team && m.team2 !== team) return;
+                        const s = parseFloat(scoresDb[`${m.matchId}_${team}`]);
+                        if (Number.isFinite(s)) { sum += s; played++; }
+                    });
+                    return { rank: rankingsDb[team], team, name: '', avg: played > 0 ? sum / played : null, played };
+                });
+                stats.sort((a, b) => {
+                    if (a.rank !== undefined && b.rank !== undefined) return a.rank - b.rank;
+                    if (a.rank !== undefined) return -1;
+                    if (b.rank !== undefined) return 1;
+                    return (b.avg ?? -1) - (a.avg ?? -1);
+                });
+                html = stats.map(s => {
+                    const pos = s.rank !== undefined
+                        ? (s.rank <= 3 ? `<span style="font-size:20px;">${medals[s.rank - 1]}</span>` : `<span style="font-weight:900;color:#f59e0b;font-size:15px;">#${s.rank}</span>`)
+                        : '<span style="color:#ccc;">—</span>';
+                    const avgDisp = s.avg !== null ? s.avg.toFixed(1) : '—';
+                    const active = s.team === currentViewTeam;
+                    return `
+                        <div onclick="window.gotoTeamDetail('${s.team}')" style="display:flex; align-items:center; gap:12px; padding:12px 4px; border-bottom:1px solid #f1f5f9; cursor:pointer; ${active ? 'background:#eff6ff;border-radius:8px;' : ''}">
+                            <div style="width:36px; text-align:center; flex-shrink:0;">${pos}</div>
+                            <div style="flex:1; font-weight:800; font-size:16px; color:#111;">${s.team}</div>
+                            <div style="text-align:right; flex-shrink:0;">
+                                <div style="font-size:15px; font-weight:800; color:#3b82f6;">均分 ${avgDisp}</div>
+                                <div style="font-size:11px; color:#94a3b8;">已赛 ${s.played} 场</div>
+                            </div>
+                            <div style="color:#cbd5e1; flex-shrink:0;">›</div>
+                        </div>
+                    `;
+                }).join('');
             }
+
+            if (!html) {
+                html = '<div style="text-align:center;color:#aaa;padding:40px;">当前赛区暂无队伍</div>';
+            }
+            container.innerHTML = html;
+        }
+
+        // 排行榜点队伍 → 跳转单队视图查看详细对阵与比分
+        window.gotoTeamDetail = function(team) {
+            currentViewTeam = team;
+            window.saveData();
+            window.updateTeamUI();
+            const tabs = document.querySelectorAll('.tab-item');
+            window.switchTab('single', '单队视图', tabs[1]);
         }
 
         window.switchTab = function(pageId, title, element) {
@@ -1178,8 +1245,6 @@
             document.getElementById(`page-${pageId}`).classList.add('active');
             element.classList.add('active');
             document.getElementById('header-title').innerText = title;
-
-            document.getElementById('fab-locate').style.display = (pageId === 'master') ? 'flex' : 'none';
         }
     </script>
 </body>

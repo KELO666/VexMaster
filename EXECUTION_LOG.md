@@ -5,6 +5,333 @@
 
 ---
 
+### 🕒 [2026-10-28 18:30:00]
+
+**🎯 任务目标**: 操控 HBuilderX 云打包（用户授权辅助功能权限后）；受阻后交接给用户手动打包
+
+**📊 执行结果**: ⚠️ 打包未完成（公共测试证书被 DCloud 停用），已交接用户手动打包；交接文档已按用户要求重写（不含测试日志）
+
+---
+
+#### [打包尝试记录]
+1. ✅ 辅助功能权限生效后，成功读取 HBuilderX 界面；因目录选择面板不接受后台点击，**改用 HBuilderX 自带 CLI**（`/Applications/HBuilderX.app/Contents/MacOS/cli`）——`project open` 成功导入项目
+2. ✅ `cli pack` 前置检查：从旧 APK（`H566AF74B__20260829124837.apk`）提取签名证书，确认旧版为**公共测试证书**，包名 `plus.H566AF74B`
+3. ✅ manifest 版本升级 `2.1/code 100` → `2.2/code 101`（保证覆盖安装）
+4. ❌ `cli pack` 报错 `Android公共测试证书存在安全隐患，新应用不再支持使用此证书提交打包` → 换 `androidpacktype 3`(云端证书) 重试时用户叫停，改为手动打包
+5. 坑：`cli pack` 曾报 `user not login`，实际是 HBuilderX GUI 未登录（`cli user info` 读缓存不作数），GUI 登录后恢复
+
+#### [交接文档重写]（按用户要求）
+`PROJECT_HANDOVER.md` 已基于当前迭代全面更新：v2.2 双端状态、排行榜数据链路、**Android 打包指南（证书卡点 + GUI/CLI 步骤）**、VEX API 实测字段事实、踩坑指南增补 #12~#14；测试过程类内容不再出现在该文档（全部留在本文件）。
+
+#### [下一步建议]
+1. 用户手动云打包（推荐云端证书；**换证书后手机需先卸载旧版 App**）
+2. 真机验证排行榜 → `git add` 全部改动 + commit + push（建议信息：`v2.2 分区排行榜 + v2.1.1 排名修正`）
+
+---
+
+#### [文件变更汇总]
+```
+✅ PROJECT_HANDOVER.md: 重写状态快照 + 打包指南 + 模块表/API 知识/踩坑增补
+✅ VEX_Master_Android/manifest.json: 版本 2.1/code 100 → 2.2/code 101
+✅ EXECUTION_LOG.md: 新增本条
+```
+
+---
+
+### 🕒 [2026-10-28 17:30:00]
+
+**🎯 任务目标**: 排行榜功能 Android 端 UI 平移，双端迭代收口
+
+**📊 执行结果**: ✅ 完成（双端代码迭代全部完毕，129/129 回归通过，待 HBuilderX 打包 + push）
+
+---
+
+#### [Android UI 平移]（`VEX_Master_Android/index.html`）
+与 iOS 相同的改造，Key 全部使用 Android 无后缀格式：
+
+- `#page-master` 总表 → 「赛区排行榜」（`leaderboard-list` 容器 + 复用 `division-filter`）
+- 底部导航：⏱️ 总表 → 🏆 排行
+- 全局新增 `rankingsDetailDb`（读 `vex_rankings_detail`）；`clearAllData` 重置；`DOMContentLoaded` 挂渲染
+- `renderLeaderboard()` + `gotoTeamDetail()` 完整平移（官方榜单优先 → 回退本地推算）
+- `syncCloudScores` / `pullFullSchedule` 刷新点重读 `rankingsDetailDb`
+- `pullFullSchedule` 补齐：`fetchTeamNames` 队名抓取 + `mergeRankingsToLocalStorage(rankings, divLabel)` 第二参数
+- 删除旧总表代码：`renderMasterTimeline` / `toggleHideDone` / `locateCurrentMatch` / `toggleDone` / `isHideDone` / fab 定位按钮 + CSS / `master-filter-container`
+- **Android 原生 API 保护**：`plus.gallery.save` / `plus.nativeObj.Bitmap` 海报保存流程未触碰（grep 确认仅存于海报函数内部）
+
+#### [Android 冒烟验证]（桌面浏览器模拟，H5+ API 不在加载路径）
+- 注入 Android Key mock 榜单 → 排行榜渲染正确（4 队官方榜单）
+- 点 5366A → 跳转单队视图：排名徽章「🏅 排名: 1」、两场对阵/比分/海报按钮完整
+- 测试数据已清理（仅清 Android Key，iOS 真实数据未动）
+
+#### [回归测试]
+`node .zcode/test_rankings.js` **129/129 全过**（三份代码拷贝 × 6 组场景）。
+
+#### [双端一致性自查]
+```
+grep master-timeline|toggleDone|fab-locate|isHideDone|renderMasterTimeline... → 双端均零残留 ✅
+VexApiSync 新导出: fetchTeamNames / mergeTeamNamesToLocalStorage → 双端一致 ✅
+存储 Key: iOS 带 _ios 后缀 / Android 无后缀 → 保持红线 ✅
+```
+
+#### [异常/Bug 记录]
+无
+
+#### [下一步建议]
+1. HBuilderX 打开 `VEX_Master_Android` → 云打包 APK → 真机验证排行榜
+2. 全部确认后 git commit + push（含 v2.1.1 排名修正 + v2.2 排行榜）
+
+---
+
+#### [文件变更汇总]
+```
+✅ VEX_Master_Android/index.html: 总表 → 分区排行榜 (+125/-130 左右)
+✅ EXECUTION_LOG.md / PROJECT_HANDOVER.md: 文档同步
+（VEX_Master_Android/vex-api-sync.js 此前已完成数据层改造）
+```
+
+---
+
+### 🕒 [2026-10-28 16:00:00]
+
+**🎯 任务目标**: 排行榜需求修正 — 渲染「整个分区的官方积分榜」（VEX Via 样式），而非本地推算
+
+**📊 执行结果**: ✅ 完成（真实赛事 VE-IQ-26-65732 端到端验证，榜单与官网 Standings 逐行一致）
+
+---
+
+#### [需求澄清]
+第一版排行榜从本地赛程推算均分，仅覆盖「有对阵数据的队伍」。用户澄清：**排行榜 = 官方分区积分榜**（如小学 A 组全部队伍的名次+均分，可切换 B 组），参考官网/VEX Via。
+
+#### [真实 API 结构探测]（用页面已存 Token 请求线上接口）
+| 发现 | 说明 |
+|------|------|
+| 均分字段 = `average_points` | 官方 Avg. Points（如 279.67），此前预估的 avg_score/average 不存在；`rankingsort1` 仅作兜底 |
+| 排名接口**不含队名** | team 对象仅 `{id, name(队号), code}` |
+| 队名在 `/events/{id}/teams` | 分页返回，含 `number`(队号) + `team_name`(队名)，本赛事 72 队分 3 页 |
+
+#### [实现改动]
+**三个模块文件**（iOS 外部 js / iOS 内联 / Android js，逻辑一致仅 Key 后缀差异）:
+1. `mergeRankingsToLocalStorage(data, divisionName)` — 新增第二参数；传入时把**整分区全量排名** `{rank, team, name, avg}` 存入 `vex_rankings_detail(_ios)`，每次同步整赛区覆盖（实时刷新），多分区并存
+2. 新增 `fetchTeamNames(eventId, token)` — 自动分页抓全赛事 `{队号: 队名}`；新增 `mergeTeamNamesToLocalStorage` — 多赛事累积入库 `vex_team_names(_ios)`
+3. `runFullSync` / UI `pullFullSchedule` — 每个赛事抓一次队名映射，排名合并时填入榜单名称列
+
+**iOS UI (`index.html`)**:
+- 新增全局 `rankingsDetailDb`，DOMContentLoaded / 云端同步 / 一键拉取三处刷新
+- `renderLeaderboard` 重写：官方榜单优先（名次 🥇🥈🥉/#N + 队号 + 队名灰色截断 + 均分整数，与官网显示一致）；无官方数据回退本地推算；选中未开赛分区（如 Final）提示「暂无官方排名数据」
+- 点队伍行仍跳单队视图看对阵详情
+
+#### [真实赛事验证]（VE-IQ-26-65732，314 场比赛，72 队）
+- 「云端同步比分」一次完成：628 条比分 + 3 个分区榜单（ES A 33 队 / ES B 39 队 / Final 空）+ 72 队队名
+- ES B 榜单与用户提供的官网截图**逐行一致**：🥇5366A ALCTRON VEX CLUB 280 / 🥈4466A QonnWolf-es1 275 / 🥉91782B 枫火科学 259 / #4 2036U M Robot 259…
+- 回归测试扩至 **129/129 全过**（新增测试 6：榜单存储/整区覆盖/average_points 提取/队名映射/teams 分页）
+
+#### [存储新增]
+| Key | 格式 | 端 |
+|-----|------|-----|
+| `vex_rankings_detail_ios` / `vex_rankings_detail` | `{ 赛区名: [{rank, team, name, avg}] }` | iOS / Android |
+| `vex_team_names_ios` / `vex_team_names` | `{ 队号: 队名 }`（多赛事累积） | iOS / Android |
+
+#### [异常/Bug 记录]
+无。首轮探测发现 avg 队名字段预估错误（接口返回 null），当即用真实接口修正。
+
+#### [下一步建议]
+1. 用户验收 ES A / ES B / Final 三个分区榜单 + 点队伍跳转
+2. 验收通过 → Android UI 平移（renderLeaderboard + 相关全局变量，Key 无 `_ios` 后缀）→ HBuilderX 打包 → git push
+
+---
+
+#### [文件变更汇总]
+```
+✅ VexMaster/vex-api-sync.js:      mergeRankings 分区榜单 + fetchTeamNames/mergeTeamNames
+✅ VexMaster/index.html:           内联同步 + renderLeaderboard 重写(官方榜单优先) + rankingsDetailDb
+✅ VEX_Master_Android/vex-api-sync.js: 同步平移 (vex_rankings_detail / vex_team_names)
+✅ .zcode/test_rankings.js: 测试 6 + 真实字段 mock → 129 断言
+✅ EXECUTION_LOG.md / PROJECT_HANDOVER.md
+```
+
+---
+
+### 🕒 [2026-10-28 12:00:00]
+
+**🎯 任务目标**: ① 验证比赛进行中排名实时刷新 ② 新功能：总表 → 分区排行榜（iOS 端）
+
+**📊 执行结果**: ✅ 完成（① 81/81 回归全过 ② 排行榜已在本地浏览器端到端验证，待用户验收）
+
+---
+
+#### [Part 1 排名实时刷新验证]
+**结论**：排名接口返回的就是请求时刻的实时积分榜，不是只取最终结果。每次点「🔄 云端同步比分」或「🌐 一键拉取完整赛程」，`runFullSync` 都会重新抓取排名并覆盖写入。比赛过程中定期点同步即可刷新。
+
+回归测试新增 **测试 5（重复同步实时刷新）**：同一赛区 60 队、三轮同步排名 5 → 2 → 8（含名次上升和回落），三份代码拷贝全部通过。**81/81 全过**。
+
+> ⚠️ 仲裁逻辑与实时刷新的兼容性说明：`rankSourceSize` 仅当新赛区队伍数 ≥ 来源赛区时才覆盖，同赛区反复同步时队伍数相等（`>=`），所以名次上升/回落都能正常刷新，不受影响。
+
+#### [Part 2 新功能：分区排行榜（v2.2，iOS 端先行）]
+按需求将「大师总表」整页替换为「赛区排行榜」：
+
+**UI 结构（`VexMaster/index.html`）**:
+- 底部导航第 3 项：⏱️ 总表 → 🏆 排行（页面标题「赛区排行榜」）
+- 右上角赛区切换下拉**保留原 ID `division-filter`**，与旧版交互一致
+- 每行：**名次**（前三名 🥇🥈🥉，其后 #N）+ **队伍号** + **均分**（蓝色加粗）+ **已赛 N 场** + 箭头
+- 点任意队伍行 → 自动跳转**单队视图**，查看该队详细对阵（跟谁打、红蓝方、比分、排名徽章、生成海报）
+
+**渲染逻辑 `renderLeaderboard()`**:
+- 队伍集合从当前赛区的对阵数据提取（与比分/排名数据同源）
+- 均分 = 该赛区**已完赛**场次的平均分（`scoresDb` 计算，未完赛不计，显示 —）
+- 排序：有官方排名的按名次排前（均分作次要参考显示），未同步排名的按均分排后
+- 「全部赛区」= 跨赛区聚合视图；切到具体赛区即该赛区榜单
+- 被查看过的队伍行高亮（与 `currentViewTeam` 比对）
+
+**删除的旧总表代码**（v1.0 遗产，本功能属需求方主动替换，非误删）:
+- `renderMasterTimeline` / `toggleHideDone` / `locateCurrentMatch` / `toggleDone` / `isHideDone` / fab 定位按钮及其 CSS / `master-filter-container`
+- ⚠️ 注意：「隐藏已赛」「NOW 定位」「完赛勾选」能力随总表一起移除，若日后需要恢复须从 git 历史找回
+
+**浏览器端到端验证**（本地 8899 端口 + mock 数据注入）:
+1. ✅ 全部赛区视图：排名排序、均分计算（84.0 = (80+88)/2 人工核对）、未完赛显示 —
+2. ✅ 赛区切换（初中组 1区）：榜单正确过滤
+3. ✅ 点 8825B → 跳单队视图：排名徽章「🏅 排名: 2」、两场比赛（对手/红蓝方/比分）完整
+4. ✅ 截图确认视觉布局正常
+
+---
+
+#### [异常/Bug 记录]
+1. 改造过程中 CSS 清理时误插入了一条悬空的 `.kelo-modal {` 选择器（会吞掉后续样式规则），已当即发现并修复，最终文件无残留。
+2. ⚠️ **测试数据覆盖提醒**：浏览器验证时向 LocalStorage 注入了 mock 赛程（53168C/8825B 等假队伍），覆盖了 `vex_matches_ios` / `vex_scores_ios` / `vex_rankings_ios`。用户之前测试会话的手动比分可能丢失，`vex_teams_ios`（关注队伍）未动。正式测试前请点「清空所有数据」后重新云端拉取。
+
+#### [下一步建议]
+1. 用户在本地页面验收排行榜（测试数据仍在，可直接看效果；测真实数据需清空后重新拉取）
+2. 验收通过 → 排行榜功能平移到 `VEX_Master_Android/index.html`（注意 Storage Key 无 `_ios` 后缀）→ HBuilderX 打包
+3. 全部确认后统一 git commit + push
+
+---
+
+#### [文件变更汇总]
+```
+✅ VexMaster/index.html: 总表 → 分区排行榜 (+90/-150，含删除旧总表逻辑)
+✅ .zcode/test_rankings.js: 新增测试 5 排名实时刷新场景
+✅ EXECUTION_LOG.md / PROJECT_HANDOVER.md: 文档同步
+（vex-api-sync.js 双端本轮无改动 — 排名刷新能力 v2.1.1 已具备）
+```
+
+---
+
+### 🕒 [2026-10-27 14:00:00]
+
+**🎯 任务目标**: 接手项目 — 验证 v2.1.1 排名修复是否真正解决问题，未解决则继续修
+
+**📊 执行结果**: ✅ 修复验证通过（72/72 项自动化测试全部通过，无需追加代码修改）
+
+---
+
+#### [接手核对]
+对上一轮的 v2.1.1 排名修复（4 个 bug：排名接口未分页 / `rankingsort1` 积分误当排名 / 多赛区覆盖冲突 / `window.VexApiSync` 挂载语句被注释吞掉）做了三方面核对：
+
+| 核对项 | 结论 |
+|--------|------|
+| 修复代码完整性 | ✅ 三份拷贝（iOS 外部 js / iOS index.html 内联 / Android js）修复代码齐全且逻辑一致 |
+| UI 渲染链路 | ✅ 双端同步/拉取后均重新读取 `rankingsDb`（iOS index.html:646,734；Android index.html:366,421），排名徽章渲染正常（iOS:1057 / Android:766） |
+| iOS 引入方式 | ✅ 确认 iOS `index.html` 只有内联副本、无外部 script 引入 → 内联副本才是 iOS 实际运行代码，已单独纳入测试 |
+
+#### [自动化验证]
+新建零依赖 Node 回归测试 `.zcode/test_rankings.js`（运行方式 `node .zcode/test_rankings.js`），用 mock fetch + mock localStorage 驱动**真实模块代码**，三份拷贝 × 4 组场景 = **72 项断言全部通过**：
+
+| 测试场景 | 验证点 | 结果 |
+|----------|--------|------|
+| 1. fetchRankings 自动翻页 | 3 页数据逐页请求、第 2/3 页队伍不丢失 | ✅ 3 拷贝全过 |
+| 2. 只信任 entry.rank | rank=0/缺失时不把 rankingsort1 积分当排名；字符串 rank 正确解析 | ✅ 3 拷贝全过 |
+| 3. 多赛区仲裁 | 60 队大分区与 16 队 Final 两种先后顺序，均保留大分区真实名次 | ✅ 3 拷贝全过 |
+| 4. runFullSync 端到端 | 2 赛区 × 2 页排名 + 比分同步 + 冲突仲裁全链路 | ✅ 3 拷贝全过 |
+
+> 备注：首轮测试曾报 6 项失败，逐一排查后确认全部是**测试脚本自身的数据构造/断言错误**（排名数据构造笔误、请求计数算错、mock 从 URL 提取赛区 ID 时下标取错取到了 eventId），修正测试后应用代码零改动即全部通过。应用代码本轮未做任何修改。
+
+#### [遗留待办（代码逻辑已验证，真机链路待验）]
+1. ⬜ **真实 API 联调**：本测试为 mock 验证，需用真实 Token + 多赛区赛事 SKU 在 iOS Safari（无痕模式）做一次端到端确认——重点看大赛区第 2 页之后的队伍排名是否出现
+2. ⬜ **Android 真机**：HBuilderX 运行验证排名后云打包
+3. ⬜ **Git 提交**：当前 5 个文件（3 代码 + 2 文档）均未提交，验证通过后 commit + push（建议信息含 "v2.1.1 排名修正"）
+
+---
+
+#### [异常/Bug 记录]
+无新增应用 bug；测试脚本首轮 6 项误报已修正（见上）。
+
+#### [下一步建议]
+按上述待办顺序执行；今后任何改动排名相关代码后，先跑 `node .zcode/test_rankings.js` 回归。
+
+---
+
+#### [文件变更汇总]
+```
+✅ .zcode/test_rankings.js: 新增回归测试 (约 240 行, 零依赖 Node 脚本)
+✅ EXECUTION_LOG.md: 新增本条执行日志
+(应用代码零改动 — v2.1.1 修复经验证有效)
+```
+
+---
+
+### 🕒 [2026-10-27 12:00:00]
+
+**🎯 任务目标**: v2.1.1 排名系统修正 — 排名缺失 / 排名数值错误 / 多赛区覆盖冲突（双端）
+
+**📊 执行结果**: ✅ 代码修复完成（⚠️ 尚未 git commit，待真机验证）
+
+---
+
+#### [Bug #1 排名接口未分页 → 大赛区排名大面积缺失]
+**现象**：大赛区只有第 1 页的队伍有排名，之后所有队伍排名静默丢失，无任何报错。
+**根因**：`/events/{id}/divisions/{divId}/rankings` 端点与 `/matches` 一样按 `meta.last_page` 分页返回，但 `fetchRankings` 只请求了第 1 页。
+**修复**：`fetchRankings` 改为 do-while 自动翻页循环（`?page=N` 递增，读取 `meta.last_page` 逐页 concat），与比赛接口同一套分页协议。
+
+#### [Bug #2 `rankingsort1` 积分被当排名 → 排名数值不准确]
+**现象**：排名徽章显示异常大的数字。
+**根因**：旧兜底逻辑 `entry.rank || entry.rankingsort1 || 0` — `rankingsort1` 是排序用的积分值不是名次，`rank` 缺失时积分被错误入库。
+**修复**：`mergeRankingsToLocalStorage` 只信任 `entry.rank`，`parseInt` 校验有效（>0 且有限）才入库，无效条目跳过。
+
+#### [Bug #3 多赛区排名覆盖冲突 → Final 小名单覆盖 Division 大分区]
+**现象**：同一队伍出现在 Division A 和 Final 两个赛区时，排名被后处理的赛区直接覆盖。
+**修复**：新增模块级内存缓存 `rankSourceSize`（队伍号 → 当前排名来源赛区的队伍总数），仅当本次赛区队伍总数 ≥ 来源赛区规模时才覆盖，保留大赛区（资格赛大分区）的真实名次。
+**注意**：`rankSourceSize` 为内存态，页面刷新后重建，属预期设计。
+
+#### [Bug #4 `window.VexApiSync` 挂载语句被注释吞掉]
+**现象**：`VexMaster/vex-api-sync.js` 被外部 `<script>` 引入时报 `VexApiSync is not defined`。
+**根因**：`// ===` 分隔注释与 `window.VexApiSync = {` 被合并到同一行，赋值语句整行变成注释。
+**修复**：注释与赋值语句换行分离。
+
+---
+
+#### [修改位置明细]
+| 文件 | 修复 | 说明 |
+|------|------|------|
+| `VexMaster/vex-api-sync.js` | #1 #2 #3 #4 | fetchRankings 分页 + mergeRankings 仲裁 + 挂载语句分离 |
+| `VexMaster/index.html` | #1 #2 #3 | 内联副本同步修改（与外部 js 是两份拷贝，必须同步） |
+| `VEX_Master_Android/vex-api-sync.js` | #1 #2 #3 | Android 端为外部 script 引入，index.html 无需改动 |
+
+**未触碰范围**：
+- 双端架构、`plus.gallery.save` 等原生 API、PDF 解析、多 SKU 动态输入、多赛区遍历逻辑均未改动
+- Android 端 `index.html` 本轮零修改（外部 script 引入方式决定了只需改 vex-api-sync.js）
+
+---
+
+#### [异常/Bug 记录]
+本轮 4 个 bug 即任务本身，均已修复；修复过程未引入新问题。
+
+#### [下一步建议]
+1. iOS 端：Safari 无痕浏览重新拉取多 SKU 赛事，验证 (a) 大赛区第 2 页之后队伍排名出现 (b) 数值是名次而非积分 (c) 同队多赛区保留大赛区名次
+2. Android 端：HBuilderX 真机验证排名，然后云打包
+3. 验证通过后三文件 `git add` + commit（建议信息：`v2.1.1 排名修正：分页补全/积分误判/多赛区仲裁`）+ push
+
+---
+
+#### [文件变更汇总]
+```
+🔧 VEX_Master_Android/vex-api-sync.js: fetchRankings 分页 + 排名合并修正 (+37/-16)
+🔧 VexMaster/index.html:               内联副本同步修复 (+30/-12)
+🔧 VexMaster/vex-api-sync.js:          分页 + 合并修正 + 挂载语句修复 (+66/-26)
+✅ PROJECT_HANDOVER.md: 新增「0. 当前状态快照」章节 + 踩坑指南新增 #3~#6，版本号升至 v2.1.1
+✅ EXECUTION_LOG.md: 新增本条执行日志
+```
+
+---
+
 ### 🕒 [2026-08-29 04:00:00]
 
 **🎯 任务目标**: 清除 Git 历史记录中的 AI 作者信息，统一代码主权

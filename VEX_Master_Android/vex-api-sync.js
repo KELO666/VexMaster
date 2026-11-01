@@ -108,7 +108,8 @@
   }
 
   /**
-   * 获取指定赛区的排名数据
+   * 获取指定赛区的排名数据（自动分页，与比赛接口同一套 meta.last_page 协议）
+   * 注意：不翻页会静默丢失第 2 页之后所有队伍的排名
    */
   async function fetchRankings(eventId, divisionId, token) {
     log(`获取赛区排名: eventId=${eventId}, divisionId=${divisionId}`);
@@ -116,16 +117,22 @@
     if (!divisionId || typeof divisionId !== 'number') throw new Error('DivisionId 参数无效');
     if (!token || typeof token !== 'string') throw new Error('Token 参数无效');
     try {
-      const url = `${API_BASE}/events/${eventId}/divisions/${divisionId}/rankings`;
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
-      });
-      if (!response.ok) { const errorText = await response.text(); throw new Error(`HTTP ${response.status}: ${errorText}`); }
-      const data = await response.json();
-      const rankings = (data && data.data && Array.isArray(data.data)) ? data.data : [];
-      logSuccess(`赛区 ${divisionId} 排名获取完成: ${rankings.length} 条`);
-      return rankings;
+      let allRankings = []; let currentPage = 1; let lastPage = 1;
+      do {
+        const url = `${API_BASE}/events/${eventId}/divisions/${divisionId}/rankings?page=${currentPage}`;
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
+        });
+        if (!response.ok) { const errorText = await response.text(); throw new Error(`HTTP ${response.status}: ${errorText}`); }
+        const data = await response.json();
+        if (!data || !data.data || !Array.isArray(data.data)) break;
+        allRankings = allRankings.concat(data.data);
+        if (data.meta && data.meta.last_page) lastPage = data.meta.last_page;
+        currentPage++;
+      } while (currentPage <= lastPage);
+      logSuccess(`赛区 ${divisionId} 排名获取完成: ${allRankings.length} 条`);
+      return allRankings;
     } catch (e) { logError(`赛区 ${divisionId} 排名获取失败:`, e.message); return []; }
   }
 
@@ -169,16 +176,92 @@
     return updatedCount;
   }
 
-  function mergeRankingsToLocalStorage(apiRankingsData) {
+  // 队伍号 -> 库中当前排名来源赛区的队伍总数（多赛区冲突仲裁用）
+  const rankSourceSize = {};
+
+  /**
+   * 排名合并（v2.1.1 修正 + v2.2 分区官方榜单）:
+   * 1. 只信任 entry.rank；rankingsort1 是排序积分值不是名次，不能当排名兜底
+   * 2. 同一队伍在多个赛区有排名时（如 Division A + Final），保留队伍数更多的大赛区排名
+   * 3. 传入 divisionName 时，把整分区完整排名（名次/队伍号/队名/平均分）存入
+   *    vex_rankings_detail，每次同步整赛区覆盖（实时刷新）。
+   *    平均分取值: entry.avg_score > entry.average > entry.rankingsort1（VIQRC 的 rankingsort1 即官方 Avg. Points）
+   */
+  function mergeRankingsToLocalStorage(apiRankingsData, divisionName) {
     if (!apiRankingsData || !Array.isArray(apiRankingsData)) return;
     let rankingsDb = {};
     try { const existing = localStorage.getItem('vex_rankings'); if (existing) rankingsDb = JSON.parse(existing); } catch (e) {}
+    const parsed = [];
     for (const entry of apiRankingsData) {
-      const teamName = entry.team ? entry.team.name : (entry.team_name || '');
-      const rank = entry.rank || entry.rankingsort1 || 0;
-      if (teamName && rank > 0) rankingsDb[teamName] = rank;
+      const teamName = (entry.team && entry.team.name) || entry.team_name || '';
+      const rank = parseInt(entry.rank, 10);
+      if (teamName && Number.isFinite(rank) && rank > 0) parsed.push({ teamName, rank });
     }
-    try { localStorage.setItem('vex_rankings', JSON.stringify(rankingsDb)); logSuccess(`排名合并完成: ${Object.keys(rankingsDb).length} 条`); } catch (e) { logError('写入排名失败:', e); }
+    for (const p of parsed) {
+      const sourceSize = rankSourceSize[p.teamName];
+      if (sourceSize === undefined || parsed.length >= sourceSize) {
+        rankingsDb[p.teamName] = p.rank;
+        rankSourceSize[p.teamName] = parsed.length;
+      }
+    }
+    try { localStorage.setItem('vex_rankings', JSON.stringify(rankingsDb)); logSuccess(`排名合并完成: 本次 ${parsed.length} 条, 库中 ${Object.keys(rankingsDb).length} 条`); } catch (e) { logError('写入排名失败:', e); }
+
+    if (divisionName) {
+      // 队名映射 (来自赛事队伍接口), 排名接口本身不含队名
+      let nameMap = {};
+      try { nameMap = JSON.parse(localStorage.getItem('vex_team_names')) || {}; } catch (e) { nameMap = {}; }
+      const standings = [];
+      for (const entry of apiRankingsData) {
+        const team = (entry.team && entry.team.name) || entry.team_name || '';
+        const rank = parseInt(entry.rank, 10);
+        if (!team || !Number.isFinite(rank) || rank <= 0) continue;
+        // 官方 Avg. Points: 真实字段为 average_points，其余为兜底
+        const avgRaw = (entry.average_points !== undefined && entry.average_points !== null) ? entry.average_points
+          : (entry.avg_score !== undefined && entry.avg_score !== null) ? entry.avg_score
+          : (entry.average !== undefined && entry.average !== null) ? entry.average
+          : entry.rankingsort1;
+        const avg = parseFloat(avgRaw);
+        standings.push({ rank, team, name: nameMap[team] || '', avg: Number.isFinite(avg) ? avg : null });
+      }
+      standings.sort((a, b) => a.rank - b.rank);
+      let detail = {};
+      try { detail = JSON.parse(localStorage.getItem('vex_rankings_detail')) || {}; } catch (e) { detail = {}; }
+      detail[divisionName] = standings;
+      try { localStorage.setItem('vex_rankings_detail', JSON.stringify(detail)); logSuccess(`分区榜单已更新: ${divisionName} (${standings.length} 队)`); } catch (e) { logError('写入分区榜单失败:', e); }
+    }
+  }
+
+  // 拉取赛事全部队伍（自动分页），返回 { 队号: 队名 }；排名接口不含队名，队名只能从这里拿
+  async function fetchTeamNames(eventId, token) {
+    if (!eventId || typeof eventId !== 'number') throw new Error('EventId 参数无效');
+    if (!token || typeof token !== 'string') throw new Error('Token 参数无效');
+    const nameMap = {};
+    let currentPage = 1, lastPage = 1;
+    try {
+      do {
+        const response = await fetch(`${API_BASE}/events/${eventId}/teams?page=${currentPage}`, { method: 'GET', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` } });
+        if (!response.ok) { const errorText = await response.text(); throw new Error(`HTTP ${response.status}: ${errorText}`); }
+        const data = await response.json();
+        if (!data || !data.data || !Array.isArray(data.data)) break;
+        for (const t of data.data) { if (t && t.number) nameMap[t.number] = t.team_name || t.organization || ''; }
+        if (data.meta && data.meta.last_page) lastPage = data.meta.last_page;
+        currentPage++;
+      } while (currentPage <= lastPage);
+      logSuccess(`队伍名称获取完成: ${Object.keys(nameMap).length} 队`);
+      return nameMap;
+    } catch (error) {
+      logError(`队伍名称获取失败: ${error.message}`);
+      return {};
+    }
+  }
+
+  // 队名映射合并入库（多赛事累积 merge）
+  function mergeTeamNamesToLocalStorage(apiNameMap) {
+    if (!apiNameMap || typeof apiNameMap !== 'object') return;
+    let nameMap = {};
+    try { nameMap = JSON.parse(localStorage.getItem('vex_team_names')) || {}; } catch (e) { nameMap = {}; }
+    Object.assign(nameMap, apiNameMap);
+    try { localStorage.setItem('vex_team_names', JSON.stringify(nameMap)); logSuccess(`队名映射已入库: 共 ${Object.keys(nameMap).length} 队`); } catch (e) { logError('写入队名映射失败:', e); }
   }
 
   /**
@@ -190,12 +273,13 @@
     if (!token || token.trim() === '') return { success: false, count: 0, message: 'Token 参数无效' };
     try {
       const eventInfo = await fetchEventId(sku, token);
+      try { mergeTeamNamesToLocalStorage(await fetchTeamNames(eventInfo.id, token)); } catch (e) { logError('队名抓取失败:', e.message); }
       let allMatches = [];
       for (const div of eventInfo.divisions) {
         const matches = await fetchMatchesData(eventInfo.id, div.id, token);
         matches.forEach(m => { m._divisionName = formatDivisionName(eventInfo.name, div.name); });
         allMatches = allMatches.concat(matches);
-        try { const rankings = await fetchRankings(eventInfo.id, div.id, token); mergeRankingsToLocalStorage(rankings); } catch (e) { logError(`赛区 ${div.name} 排名失败:`, e.message); }
+        try { const rankings = await fetchRankings(eventInfo.id, div.id, token); mergeRankingsToLocalStorage(rankings, formatDivisionName(eventInfo.name, div.name)); } catch (e) { logError(`赛区 ${div.name} 排名失败:`, e.message); }
       }
       const count = syncScoresToLocal(allMatches);
       return { success: true, count, message: `同步成功，共 ${eventInfo.divisions.length} 个赛区，更新了 ${count} 条比分记录` };
@@ -253,7 +337,7 @@
   // 公开 API
   // ============================================================
   window.VexApiSync = {
-    fetchEventId, fetchMatchesData, fetchRankings,
+    fetchEventId, fetchMatchesData, fetchRankings, fetchTeamNames, mergeTeamNamesToLocalStorage,
     syncScoresToLocal, mergeRankingsToLocalStorage,
     runFullSync, generateScheduleFromApi, formatDivisionName
   };
