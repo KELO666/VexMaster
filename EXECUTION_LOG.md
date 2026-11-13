@@ -67,6 +67,11 @@
 1. 用户真机验收：更新页面 → 「一键拉取完整赛程」→ 技能 Tab / 排行榜「决赛」切换 / 单队视图双徽章与决赛卡片
 2. 验收通过 → Android 打包（manifest 已升 2.4/code 103）→ git commit + push
 
+#### [补充：验收收尾]
+
+- 用户真机验收通过（含两处微调：技能榜去跳转、Tab 改名「联队」）→ 已 git commit `916c1b8` 并推送 GitHub Pages
+- 踩坑指南新增 #17：维护者本机 VPN/代理（127.0.0.1:7890）关闭时 git/curl 报连接失败的判别与绕过方法（`git -c http.proxy= -c https.proxy= push` / `curl --noproxy '*'`）
+
 ---
 
 

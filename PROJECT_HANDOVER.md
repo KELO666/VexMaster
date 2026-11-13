@@ -380,6 +380,21 @@ ${matchId}_${team}  →  如 "Q1_53168C"
     - **应对**：调 API 必须用浏览器环境（本地 http.server + 页面内 fetch，见 #14）；curl 只能测无鉴权行为（如 302 跳登录、路由 404）
     - **限流陷阱**：连续自动化请求后边缘会拦截该浏览器会话，所有 fetch 变 `Failed to fetch`（响应无 CORS 头），顶层导航正常 → 判别方法：页面内 `fetch(url, {mode:'no-cors'})` 返回 opaque 即网络通、是被边缘拦截；等待冷却即可恢复，**用户真机不受影响**
 
+### 🔵 开发机环境知识（2026-11-14 增补）
+
+17. **本机 VPN/代理 = `127.0.0.1:7890`（维护者的 VPN），关闭后 git/curl 会"断网"**
+    - **背景**：维护者 Mac 的 `http_proxy` / `https_proxy` 环境变量指向本地 VPN（Clash 类工具，监听 `127.0.0.1:7890`）。所有 git / curl 请求默认走这个代理
+    - **症状**（VPN 关闭时，程序本身没有任何问题）：
+      - `git push / fetch` 报 `fatal: unable to access 'https://github.com/...': Failed to connect to 127.0.0.1 port 7890 after 0 ms: Couldn't connect to server`
+      - `curl` 报 `HTTP 000` / connection refused
+    - **应对**（二选一）：
+      1. 把 VPN 打开再操作（维护者的常规状态）
+      2. 临时绕过代理直连：
+         - git：`git -c http.proxy= -c https.proxy= push origin main`
+         - curl：加 `--noproxy '*'`（或脚本里清掉 `http_proxy`/`https_proxy` 环境变量）
+    - **确认方法**：`env | grep -i proxy` 查看当前代理变量；`lsof -nP -iTCP:7890 -sTCP:LISTEN` 看 VPN 是否在运行
+    - **注意**：VPN 开关会改变出口 IP/地区。结合 #16 的 Cloudflare Bot Management，调试 API 时若突然被限流/拦截，先想想是不是刚切换过 VPN
+
 ---
 
 ## 7. 开发工作流
