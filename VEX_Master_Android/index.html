@@ -81,6 +81,17 @@
         .btn-poster { background: linear-gradient(135deg, #3b82f6, #8b5cf6); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 10px rgba(59,130,246,0.3); }
         .btn-poster:active { transform: scale(0.95); }
         .team-rank { display: inline-flex; align-items: center; gap: 3px; background: linear-gradient(135deg, #f59e0b, #d97706); color: white; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 800; margin-left: 8px; box-shadow: 0 2px 6px rgba(245,158,11,0.3); }
+        .team-rank-final { display: inline-flex; align-items: center; gap: 3px; background: linear-gradient(135deg, #8b5cf6, #6d28d9); color: white; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 800; margin-left: 8px; box-shadow: 0 2px 6px rgba(139,92,246,0.3); }
+
+        /* 排行榜数据源切换 (资格赛/决赛) + 技能赛年级过滤 */
+        .rank-mode-toggle { display: inline-flex; background: #f1f5f9; border-radius: 8px; padding: 2px; }
+        .rank-mode-btn, .skill-filter-btn { border: none; background: transparent; padding: 4px 10px; font-size: 12px; font-weight: bold; color: #64748b; border-radius: 6px; cursor: pointer; }
+        .rank-mode-btn.active { background: #111; color: white; }
+        #rank-mode-finals.active, .skill-filter-btn.active { background: linear-gradient(135deg, #f59e0b, #d97706); color: white; }
+
+        /* 决赛场次标识 (v2.4) */
+        .finals-badge { display: inline-block; font-size: 11px; background: linear-gradient(135deg, #f59e0b, #d97706); color: white; padding: 2px 6px; border-radius: 4px; margin-left: 6px; font-weight: bold; vertical-align: middle; }
+        .finals-match { border-left: 4px solid #f59e0b; }
         
         #poster-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 9999; flex-direction: column; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
         #poster-preview { width: 85%; max-height: 70vh; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); object-fit: contain; }
@@ -172,8 +183,14 @@
 
     <div id="page-master" class="page">
         <div class="card" style="padding-bottom: 10px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                <span style="font-weight: bold; font-size: 15px; color: #555;">赛区排行榜</span>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <span style="font-weight: bold; font-size: 15px; color: #555;">联队排行榜</span>
+                <div class="rank-mode-toggle">
+                    <button type="button" id="rank-mode-quals" class="rank-mode-btn active" onclick="window.setRankMode('quals')">资格赛</button>
+                    <button type="button" id="rank-mode-finals" class="rank-mode-btn" onclick="window.setRankMode('finals')">🏆 决赛</button>
+                </div>
+            </div>
+            <div style="display: flex; justify-content: flex-end; align-items: center;">
                 <select id="division-filter" onchange="window.changeDivisionFilter(this.value)" style="padding: 4px 8px; border-radius: 6px; border: 1px solid #ccc; font-size: 13px; background: #fff; max-width: 110px; outline: none;">
                     <option value="All">全部赛区</option>
                 </select>
@@ -183,6 +200,25 @@
         <div class="card" style="padding: 0; background: transparent; box-shadow: none;">
             <div id="leaderboard-list" style="background: white; border-radius: 12px; padding: 10px 16px;">
                 <div style="text-align:center;color:#aaa;padding:30px;">暂无数据</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="page-skills" class="page">
+        <div class="card" style="padding-bottom: 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-weight: bold; font-size: 15px; color: #555;">技能赛排行榜</span>
+                <div class="rank-mode-toggle">
+                    <button type="button" class="skill-filter-btn active" data-grade="All" onclick="window.setSkillFilter('All')">全部</button>
+                    <button type="button" class="skill-filter-btn" data-grade="ES" onclick="window.setSkillFilter('ES')">小学</button>
+                    <button type="button" class="skill-filter-btn" data-grade="MS" onclick="window.setSkillFilter('MS')">初中</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card" style="padding: 0; background: transparent; box-shadow: none;">
+            <div id="skills-list" style="background: white; border-radius: 12px; padding: 10px 16px;">
+                <div style="text-align:center;color:#aaa;padding:30px;">暂无数据，请先云端同步</div>
             </div>
         </div>
     </div>
@@ -213,8 +249,11 @@
         <div class="tab-item" onclick="window.switchTab('single', '单队视图', this)">
             <div class="tab-icon">📋</div><div>单队</div>
         </div>
-        <div class="tab-item" onclick="window.switchTab('master', '赛区排行榜', this)">
-            <div class="tab-icon">🏆</div><div>排行</div>
+        <div class="tab-item" onclick="window.switchTab('master', '联队排行榜', this)">
+            <div class="tab-icon">🏆</div><div>联队</div>
+        </div>
+        <div class="tab-item" onclick="window.switchTab('skills', '技能赛排行榜', this)">
+            <div class="tab-icon">🎯</div><div>技能</div>
         </div>
     </div>
 
@@ -230,17 +269,28 @@
         let doneDb = JSON.parse(localStorage.getItem('vex_done')) || {};
         let rankingsDb = JSON.parse(localStorage.getItem('vex_rankings')) || {};
         let rankingsDetailDb = JSON.parse(localStorage.getItem('vex_rankings_detail')) || {}; // 分区官方榜单
+        let skillsDb = JSON.parse(localStorage.getItem('vex_skills')) || {}; // 技能赛 {队号: {rank, driver:{attempts,best}, programming:{attempts,best}, total}}
+        let finalistRankDb = JSON.parse(localStorage.getItem('vex_finalist_rankings')) || {}; // 决赛排名 {队号: 名次}
+        let finalistDetailDb = JSON.parse(localStorage.getItem('vex_finalist_detail')) || {}; // 决赛分区榜单 {赛区名: [{rank,team,name,score}]}
+        let teamGradeDb = JSON.parse(localStorage.getItem('vex_team_grades')) || {}; // 队伍年级 {队号: grade}
         let currentDivFilter = 'All';
+        let currentRankMode = 'quals'; // 排行榜数据源: 'quals'=资格赛 | 'finals'=决赛
+        let currentSkillFilter = 'All'; // 技能赛榜年级过滤: 'All' | 'ES' | 'MS'
 
         document.addEventListener('DOMContentLoaded', function() {
             const countEl = document.getElementById('total-matches-count');
             if (countEl) countEl.innerText = globalMatches ? globalMatches.length : 0;
             rankingsDb = JSON.parse(localStorage.getItem('vex_rankings')) || {};
             rankingsDetailDb = JSON.parse(localStorage.getItem('vex_rankings_detail')) || {};
+            skillsDb = JSON.parse(localStorage.getItem('vex_skills')) || {};
+            finalistRankDb = JSON.parse(localStorage.getItem('vex_finalist_rankings')) || {};
+            finalistDetailDb = JSON.parse(localStorage.getItem('vex_finalist_detail')) || {};
+            teamGradeDb = JSON.parse(localStorage.getItem('vex_team_grades')) || {};
             if (myTeams && myTeams.length > 0) window.updateTeamUI();
             window.updateDivisionFilterUI();
             window.loadApiConfig();
             window.renderLeaderboard();
+            window.renderSkillsBoard();
         });
 
         window.saveData = function() {
@@ -255,10 +305,12 @@
             if (confirm("⚠️ 确定要清空所有数据吗？这将删除所有排表和比分！")) {
                 localStorage.clear();
                 globalMatches = []; myTeams = []; currentViewTeam = ""; scoresDb = {}; doneDb = {}; rankingsDb = {}; rankingsDetailDb = {};
-                currentDivFilter = 'All';
+                skillsDb = {}; finalistRankDb = {}; finalistDetailDb = {}; teamGradeDb = {};
+                currentDivFilter = 'All'; currentRankMode = 'quals'; currentSkillFilter = 'All';
                 document.getElementById('total-matches-count').innerText = "0";
                 window.updateTeamUI();
                 window.updateDivisionFilterUI();
+                window.renderSkillsBoard();
                 alert("数据已全部清空，请重新导入最新文件。");
             }
         }
@@ -359,9 +411,14 @@
             rankingsDb = savedRankings ? JSON.parse(savedRankings) : {};
             const savedRankingsDetail = localStorage.getItem('vex_rankings_detail');
             rankingsDetailDb = savedRankingsDetail ? JSON.parse(savedRankingsDetail) : {};
+            skillsDb = JSON.parse(localStorage.getItem('vex_skills')) || {};
+            finalistRankDb = JSON.parse(localStorage.getItem('vex_finalist_rankings')) || {};
+            finalistDetailDb = JSON.parse(localStorage.getItem('vex_finalist_detail')) || {};
+            teamGradeDb = JSON.parse(localStorage.getItem('vex_team_grades')) || {};
             window.saveData(); window.updateTeamUI(); window.updateDivisionFilterUI();
             if (window.renderLeaderboard) window.renderLeaderboard();
             if (window.renderSingleTeam) window.renderSingleTeam();
+            if (window.renderSkillsBoard) window.renderSkillsBoard();
             let msg = `同步完成，共更新 ${totalUpdated} 条比分记录`;
             if (errorMessages.length > 0) msg += `\n\n失败项:\n${errorMessages.join('\n')}`;
             statusMsg.innerText = `同步完成，共更新 ${totalUpdated} 条比分记录`;
@@ -390,6 +447,8 @@
                     statusMsg.innerText = `(${i + 1}/${skuList.length}) 获取赛事信息: ${sku}...`;
                     const eventInfo = await VexApiSync.fetchEventId(sku, token);
                     try { VexApiSync.mergeTeamNamesToLocalStorage(await VexApiSync.fetchTeamNames(eventInfo.id, token)); } catch (e) { console.error('[PullSchedule] 队名抓取失败:', e.message); }
+                    try { VexApiSync.mergeTeamGradesToLocalStorage(await VexApiSync.fetchTeamGrades(eventInfo.id, token)); } catch (e) { console.error('[PullSchedule] 年级抓取失败:', e.message); }
+                    try { VexApiSync.mergeSkillsToLocalStorage(await VexApiSync.fetchSkills(eventInfo.id, token)); } catch (e) { console.error('[PullSchedule] 技能赛抓取失败:', e.message); }
                     for (const div of eventInfo.divisions) {
                         statusMsg.innerText = `(${i + 1}/${skuList.length}) ${div.name} 赛程数据...`;
                         const matches = await VexApiSync.fetchMatchesData(eventInfo.id, div.id, token);
@@ -397,6 +456,8 @@
                         matches.forEach(m => { m._divisionName = divLabel; });
                         allMatchesData = allMatchesData.concat(matches);
                         try { const rankings = await VexApiSync.fetchRankings(eventInfo.id, div.id, token); VexApiSync.mergeRankingsToLocalStorage(rankings, divLabel); } catch (e) { console.error('[PullSchedule] 排名获取失败:', e.message); }
+                        // 决赛排名 (路径用赛区 order; 未开决赛时为空)
+                        try { const fr = await VexApiSync.fetchFinalistRankings(eventInfo.id, div.order || div.id, token); VexApiSync.mergeFinalistRankingsToLocalStorage(fr, divLabel); } catch (e) { console.error('[PullSchedule] 决赛排名获取失败:', e.message); }
                     }
                 } catch (error) { errorMessages.push(`${sku}: ${error.message}`); console.error(`[PullSchedule] ${sku} 拉取失败:`, error.message); }
             }
@@ -417,12 +478,17 @@
             rankingsDb = savedRankings ? JSON.parse(savedRankings) : {};
             const savedRankingsDetail = localStorage.getItem('vex_rankings_detail');
             rankingsDetailDb = savedRankingsDetail ? JSON.parse(savedRankingsDetail) : {};
+            skillsDb = JSON.parse(localStorage.getItem('vex_skills')) || {};
+            finalistRankDb = JSON.parse(localStorage.getItem('vex_finalist_rankings')) || {};
+            finalistDetailDb = JSON.parse(localStorage.getItem('vex_finalist_detail')) || {};
+            teamGradeDb = JSON.parse(localStorage.getItem('vex_team_grades')) || {};
             const countEl = document.getElementById('total-matches-count');
             if (countEl) countEl.innerText = globalMatches.length;
             myTeams = []; currentViewTeam = '';
             window.saveData(); window.updateTeamUI(); window.updateDivisionFilterUI();
             if (window.renderLeaderboard) window.renderLeaderboard();
             if (window.renderSingleTeam) window.renderSingleTeam();
+            if (window.renderSkillsBoard) window.renderSkillsBoard();
             let msg = `拉取成功！聚合 ${skuList.length} 个赛事，共生成 ${count} 场比赛`;
             if (errorMessages.length > 0) msg += `\n\n失败项:\n${errorMessages.join('\n')}`;
             statusMsg.innerText = `拉取成功，共生成 ${count} 场比赛`;
@@ -723,11 +789,30 @@
             const teamMatches = globalMatches.filter(m => m.team1 === currentViewTeam || m.team2 === currentViewTeam);
             teamMatches.sort((a, b) => a.timeValue - b.timeValue);
 
+            // 排名显示: 资格赛排名 (金黄) + 决赛排名 (紫金), 区分两种名次
             const rank = rankingsDb[currentViewTeam];
-            const rankBadge = rank ? `<span class="team-rank">\ud83c\udfc5 排名: ${rank}</span>` : '';
+            const qualBadge = rank ? `<span class="team-rank">🏅 资格赛 #${rank}</span>` : '';
+            const fr = finalistRankDb[currentViewTeam];
+            const finalBadge = fr ? `<span class="team-rank-final">🏆 决赛 #${fr}</span>` : '';
+            const rankBadge = qualBadge + finalBadge;
+
+            // 技能赛摘要卡 (v2.4): 打了几场 / 自动多少分 / 手动多少分
+            const sk = skillsDb[currentViewTeam];
+            const skillsCard = sk ? `
+                <div class="match-card" style="background: linear-gradient(135deg, #eff6ff, #f5f3ff); border: 1px solid #dbeafe;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div style="font-weight:800; font-size:15px; color:#111;">🎯 技能赛${sk.rank ? ' #' + sk.rank : ''}</div>
+                        <div style="font-size:16px; font-weight:800; color:#3b82f6;">总分 ${sk.total !== null && sk.total !== undefined ? sk.total : '—'}</div>
+                    </div>
+                    <div style="display:flex; gap:16px; margin-top:8px; font-size:13px; color:#64748b; flex-wrap:wrap;">
+                        <span>自动: <b style="color:#111;">${sk.programming && sk.programming.best !== null && sk.programming.best !== undefined ? sk.programming.best : '—'}</b> 分（${sk.programming ? (sk.programming.attempts || 0) : 0} 场）</span>
+                        <span>手动: <b style="color:#111;">${sk.driver && sk.driver.best !== null && sk.driver.best !== undefined ? sk.driver.best : '—'}</b> 分（${sk.driver ? (sk.driver.attempts || 0) : 0} 场）</span>
+                    </div>
+                </div>` : '';
+
             let html = `
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 15px; padding: 0 5px;">
-                    <div style="display:flex; align-items:center;">
+                    <div style="display:flex; align-items:center; flex-wrap:wrap;">
                         <h2 style="margin:0; font-size:24px; color:#111;">${currentViewTeam}</h2>
                         ${rankBadge}
                     </div>
@@ -736,20 +821,26 @@
                 <div style="font-size:12px; color:#888; margin-bottom: 10px; padding: 0 5px;">本次赛事共 ${teamMatches.length} 场</div>
             `;
 
+            html += skillsCard;
+
             teamMatches.forEach(m => {
-                const isRed = (m.team1 === currentViewTeam); 
+                const isRed = (m.team1 === currentViewTeam);
                 const myRoleChar = isRed ? "红方" : "蓝方";
                 const roleClass = isRed ? "bg-red" : "bg-blue";
                 const alliance = isRed ? m.team2 : m.team1;
                 const mDiv = m.division || '默认赛区';
+                // 决赛场次 (matchId 以 F 开头) 金色标识, 与资格赛区分
+                const isFinals = /^F/.test(m.matchId);
+                const finalsBadge = isFinals ? '<span class="finals-badge">🏆 决赛</span>' : '';
+                const finalsCardClass = isFinals ? ' finals-match' : '';
                 
                 const scoreKey = `${m.matchId}_${currentViewTeam}`;
                 const score = scoresDb[scoreKey] || '';
                 
                 html += `
-                    <div class="match-card">
+                    <div class="match-card${finalsCardClass}">
                         <div class="mc-top">
-                            <div class="mc-q">${m.matchId} <span class="div-badge">${mDiv}</span></div>
+                            <div class="mc-q">${m.matchId} <span class="div-badge">${mDiv}</span>${finalsBadge}</div>
                             <div class="mc-time">${m.time}</div>
                         </div>
                         <div class="mc-mid">
@@ -778,9 +869,26 @@
          * - 右上角切换赛区；「全部赛区」= 各分区榜单依次排列
          * - 点队伍 → 单队视图查看详细对阵与比分
          */
+        /**
+         * 排行榜数据源切换 (v2.4): 'quals'=资格赛官方榜 | 'finals'=决赛官方榜 (finalistRankings 接口)
+         */
+        window.setRankMode = function(mode) {
+            currentRankMode = mode;
+            const qb = document.getElementById('rank-mode-quals'), fb = document.getElementById('rank-mode-finals');
+            if (qb) qb.classList.toggle('active', mode === 'quals');
+            if (fb) fb.classList.toggle('active', mode === 'finals');
+            window.renderLeaderboard();
+        }
+
         window.renderLeaderboard = function() {
             const container = document.getElementById('leaderboard-list');
             if (!container) return;
+
+            // 决赛模式: 渲染官方决赛榜 (不依赖本地赛程)
+            if (currentRankMode === 'finals') {
+                window.renderFinalsLeaderboard();
+                return;
+            }
 
             if (!globalMatches || globalMatches.length === 0) {
                 container.innerHTML = '<div style="text-align:center;color:#aaa;padding:40px;">暂无数据，请先导入赛程或拉取云端赛程</div>';
@@ -872,6 +980,133 @@
             if (!html) {
                 html = '<div style="text-align:center;color:#aaa;padding:40px;">当前赛区暂无队伍</div>';
             }
+            container.innerHTML = html;
+        }
+
+        /**
+         * 决赛榜渲染 (v2.4): 数据源 finalistDetailDb (云端 finalistRankings 接口)
+         * 每行: 名次 / 队号 / 队名 / 决赛最高分 —— 与官网 Finalist Rankings 一致
+         */
+        window.renderFinalsLeaderboard = function() {
+            const container = document.getElementById('leaderboard-list');
+            if (!container) return;
+            const medals = ['🥇', '🥈', '🥉'];
+
+            const row = (s) => {
+                const pos = s.rank <= 3
+                    ? `<span style="font-size:20px;">${medals[s.rank - 1]}</span>`
+                    : `<span style="font-weight:900;color:#8b5cf6;font-size:15px;">#${s.rank}</span>`;
+                const scoreDisp = (s.score !== undefined && s.score !== null) ? s.score : '—';
+                const active = s.team === currentViewTeam;
+                return `
+                    <div onclick="window.gotoTeamDetail('${s.team}')" style="display:flex; align-items:center; gap:10px; padding:12px 4px; border-bottom:1px solid #f1f5f9; cursor:pointer; ${active ? 'background:#f5f3ff;border-radius:8px;' : ''}">
+                        <div style="width:34px; text-align:center; flex-shrink:0;">${pos}</div>
+                        <div style="flex-shrink:0; font-weight:800; font-size:15px; color:#111;">${s.team}</div>
+                        <div style="flex:1; font-size:12px; color:#94a3b8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${s.name || ''}</div>
+                        <div style="text-align:right; flex-shrink:0;">
+                            <div style="font-size:15px; font-weight:800; color:#8b5cf6;">${scoreDisp}</div>
+                            <div style="font-size:10px; color:#94a3b8;">决赛最高分</div>
+                        </div>
+                        <div style="color:#cbd5e1; flex-shrink:0;">›</div>
+                    </div>
+                `;
+            };
+
+            let html = '';
+            if (currentDivFilter !== 'All') {
+                const list = finalistDetailDb && finalistDetailDb[currentDivFilter];
+                html = (list && list.length > 0) ? list.map(row).join('')
+                    : '<div style="text-align:center;color:#aaa;padding:40px;">该赛区暂无决赛排名（可能尚未开赛）</div>';
+            } else if (finalistDetailDb && Object.keys(finalistDetailDb).length > 0) {
+                Object.keys(finalistDetailDb).forEach(divName => {
+                    const list = finalistDetailDb[divName] || [];
+                    if (!list.length) return;
+                    html += `<div style="padding:10px 4px 4px; font-size:13px; font-weight:bold; color:#64748b;">${divName}</div>`;
+                    html += list.map(row).join('');
+                });
+                if (!html) html = '<div style="text-align:center;color:#aaa;padding:40px;">暂无决赛排名数据</div>';
+            } else {
+                html = '<div style="text-align:center;color:#aaa;padding:40px;">暂无决赛排名数据<br><span style="font-size:12px;">请点「云端同步比分」拉取；决赛尚未开赛时无数据</span></div>';
+            }
+            container.innerHTML = html;
+        }
+
+        /**
+         * 技能赛排行榜 (v2.4): 数据源 skillsDb (云端 /events/{id}/skills)
+         * driver=手动, programming=自动, total=两者最高分之和 (官方合并口径, rank 即官方总排名)
+         * 右上角按年级过滤 (teamGradeDb): 全部 / 小学 ES / 初中 MS
+         * 纯展示列表, 不提供点击跳转 (信息已在行内展示完整)
+         */
+        window.setSkillFilter = function(val) {
+            currentSkillFilter = val;
+            document.querySelectorAll('.skill-filter-btn').forEach(b => b.classList.toggle('active', b.dataset.grade === val));
+            window.renderSkillsBoard();
+        }
+
+        window.renderSkillsBoard = function() {
+            const container = document.getElementById('skills-list');
+            if (!container) return;
+            if (!skillsDb || Object.keys(skillsDb).length === 0) {
+                container.innerHTML = '<div style="text-align:center;color:#aaa;padding:40px;">暂无技能赛数据<br><span style="font-size:12px;">请点「云端同步比分」或「一键拉取完整赛程」</span></div>';
+                return;
+            }
+
+            let nameMap = {};
+            try { nameMap = JSON.parse(localStorage.getItem('vex_team_names')) || {}; } catch (e) { nameMap = {}; }
+            const gradeOf = (team) => {
+                const g = teamGradeDb[team];
+                if (/Elementary/i.test(g || '')) return 'ES';
+                if (/Middle/i.test(g || '')) return 'MS';
+                if (/High/i.test(g || '')) return 'HS';
+                return '';
+            };
+
+            const medals = ['🥇', '🥈', '🥉'];
+            let entries = Object.entries(skillsDb).map(([team, s]) => ({ team, ...s }));
+            if (currentSkillFilter !== 'All') {
+                entries = entries.filter(e => gradeOf(e.team) === currentSkillFilter);
+            }
+            // 官方 rank 升序, 无 rank (未比完) 放最后
+            entries.sort((a, b) => (a.rank || 9999) - (b.rank || 9999));
+
+            if (entries.length === 0) {
+                container.innerHTML = '<div style="text-align:center;color:#aaa;padding:40px;">该年级暂无技能赛数据</div>';
+                return;
+            }
+
+            let html = '';
+            entries.forEach(e => {
+                const pos = e.rank && e.rank <= 3
+                    ? `<span style="font-size:20px;">${medals[e.rank - 1]}</span>`
+                    : `<span style="font-weight:900;color:#3b82f6;font-size:15px;">${e.rank ? '#' + e.rank : '—'}</span>`;
+                const name = nameMap[e.team] || '';
+                const prog = (e.programming && e.programming.best !== null && e.programming.best !== undefined) ? e.programming.best : null;
+                const drv = (e.driver && e.driver.best !== null && e.driver.best !== undefined) ? e.driver.best : null;
+                const progN = e.programming ? (e.programming.attempts || 0) : 0;
+                const drvN = e.driver ? (e.driver.attempts || 0) : 0;
+                const total = (e.total !== null && e.total !== undefined) ? e.total : null;
+                html += `
+                    <div style="display:flex; align-items:center; gap:10px; padding:12px 2px; border-bottom:1px solid #f1f5f9;">
+                        <div style="width:30px; text-align:center; flex-shrink:0;">${pos}</div>
+                        <div style="flex:1; min-width:0;">
+                            <div style="font-weight:800; font-size:15px; color:#111;">${e.team}</div>
+                            <div style="font-size:11px; color:#94a3b8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${name}</div>
+                        </div>
+                        <div style="text-align:center; flex-shrink:0; width:48px;">
+                            <div style="font-size:14px; font-weight:800; color:#3b82f6;">${prog !== null ? prog : '—'}</div>
+                            <div style="font-size:10px; color:#94a3b8;">自动 ${progN}场</div>
+                        </div>
+                        <div style="text-align:center; flex-shrink:0; width:48px;">
+                            <div style="font-size:14px; font-weight:800; color:#ef4444;">${drv !== null ? drv : '—'}</div>
+                            <div style="font-size:10px; color:#94a3b8;">手动 ${drvN}场</div>
+                        </div>
+                        <div style="text-align:center; flex-shrink:0; width:36px;">
+                            <div style="font-size:15px; font-weight:800; color:#111;">${total !== null ? total : '—'}</div>
+                            <div style="font-size:10px; color:#94a3b8;">总分</div>
+                        </div>
+                    </div>
+                `;
+            });
             container.innerHTML = html;
         }
 

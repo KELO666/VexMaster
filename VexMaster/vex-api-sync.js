@@ -257,6 +257,95 @@
   }
 
   // ============================================================
+  // 场次 ID 解析与时间格式化 (v2.3 决赛独立编号)
+  // ============================================================
+
+  /**
+   * 为 API 比赛数据解析本地场次 ID (写入 m._matchId, 幂等可重复调用)
+   *
+   * 背景: matchnum 在每个赛区各自从 1 开始编号。决赛 (round=15) 的 matchnum
+   * 会与资格赛撞号 —— 旧逻辑把决赛第 1 场编成 Q1, 比分键 Q1_队号 与资格赛
+   * 第 1 场互相覆盖, 决赛场次也无法在赛程中正确呈现 (v2.3 前的根本缺陷)。
+   *
+   * 规则 (2026-11 用真实赛事 VE-IQ-26-66973 / VE-IQ-26-65732 验证):
+   * - 资格赛 (round=2): Q{matchnum} — 与 PDF 导入及历史数据兼容, 保持不变
+   * - 决赛 (round=15, 或名称/赛区名含 Final):
+   *   单赛区 → F{matchnum} (如 F1..F12)
+   *   多赛区 → F{赛区序号}-{matchnum} (同一队伍可能同时打本赛区决赛和跨赛区
+   *   总决赛, 两边 matchnum 都从 1 重编, 必须带赛区维度消歧)
+   * - 同赛区决赛重号兜底 (VRC 淘汰赛多轮): 追加 (2)(3) 序号
+   */
+  function resolveMatchIds(apiMatchesData) {
+    if (!apiMatchesData || !Array.isArray(apiMatchesData)) return;
+
+    // 扫描出现的赛区 (按首次出现顺序), 判断是否多赛事区
+    const divIds = [];
+    for (const m of apiMatchesData) {
+      const dId = m.division && m.division.id;
+      if (dId !== undefined && dId !== null && !divIds.includes(dId)) divIds.push(dId);
+    }
+    const multiDiv = divIds.length > 1;
+
+    const seen = {}; // 决赛 ID 去重 (多轮重号兜底)
+    for (const m of apiMatchesData) {
+      if (m._matchId) continue; // 已解析过 (generateScheduleFromApi 内部再调 syncScoresToLocal 时幂等)
+
+      const isFinals = Number(m.round) === 15
+        || /final/i.test(m.name || '')
+        || /final/i.test(m._divisionName || '')
+        || /final/i.test((m.division && m.division.name) || '');
+
+      let matchId = '';
+      if (!isFinals) {
+        matchId = m.matchnum ? `Q${m.matchnum}` : (m.name || '');
+      } else if (m.matchnum) {
+        matchId = multiDiv
+          ? `F${divIds.indexOf(m.division && m.division.id) + 1}-${m.matchnum}`
+          : `F${m.matchnum}`;
+      } else {
+        matchId = m.name || '';
+      }
+      if (!matchId) continue;
+
+      if (isFinals) {
+        if (seen[matchId]) { seen[matchId]++; matchId = `${matchId}(${seen[matchId]})`; }
+        else { seen[matchId] = 1; }
+      }
+      m._matchId = matchId;
+    }
+  }
+
+  /**
+   * API 时间字段格式化为本地展示时间
+   * 决赛场次的 scheduled 通常为 null, 回退用 started (实际开赛时间)
+   */
+  function formatApiTime(iso) {
+    if (!iso) return '待定';
+    try {
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return '待定';
+      const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
+      const period = d.getHours() >= 12 ? 'PM' : 'AM';
+      const h = d.getHours() > 12 ? d.getHours() - 12 : (d.getHours() === 0 ? 12 : d.getHours());
+      return `周${dayNames[d.getDay()]} ${h}:${d.getMinutes().toString().padStart(2, '0')} ${period}`;
+    } catch (e) { return '待定'; }
+  }
+
+  // 与 UI 端 parseTimeToMinutes 同算法, 保证云端场次与 PDF 场次排序一致
+  function parseLocalTimeToMinutes(timeStr) {
+    const m = (timeStr || '').match(/(?:周)?([一二三四五六日])?\s*(\d{1,2}):(\d{2})\s*([AP]M)?/i);
+    if (!m) return 999999;
+    const dayMap = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 7 };
+    let day = m[1] ? dayMap[m[1]] || 0 : 0;
+    let hours = parseInt(m[2], 10);
+    const mins = parseInt(m[3], 10);
+    const ampm = m[4] ? m[4].toUpperCase() : '';
+    if (ampm === 'PM' && hours !== 12) hours += 12;
+    if (ampm === 'AM' && hours === 12) hours = 0;
+    return day * 24 * 60 + hours * 60 + mins;
+  }
+
+  // ============================================================
   // 数据合并模块
   // ============================================================
 
@@ -270,6 +359,8 @@
       logError('API 比赛数据无效');
       return 0;
     }
+
+    resolveMatchIds(apiMatchesData);
 
     let scoresDb = {};
     let doneDb = {};
@@ -286,7 +377,7 @@
     let updatedCount = 0;
 
     for (const apiMatch of apiMatchesData) {
-      let matchId = apiMatch.matchnum ? `Q${apiMatch.matchnum}` : (apiMatch.name || '');
+      const matchId = apiMatch._matchId || '';
       if (!matchId) continue;
       if (!apiMatch.alliances || !Array.isArray(apiMatch.alliances)) continue;
 
@@ -465,6 +556,230 @@
     }
   }
 
+  // ============================================================
+  // 技能赛 / 决赛排名 / 队伍年级 (v2.4 新增)
+  // 接口形态 2026-11-14 用真实赛事 VE-IQ-26-66973 验证:
+  // - GET /events/{id}/skills: 分页, 条目 {type:'driver'|'programming',
+  //   attempts, score, rank, team{id,name,code}}。同一队伍两条 type 共享
+  //   同一个官方合并排名 (rank = 按 手动最高 + 自动最高 的总分排定)
+  // - GET /events/{id}/divisions/{order}/finalistRankings: 决赛官方榜,
+  //   条目 {rank, team{name}, high_score}。注意路径参数是赛区 order 不是 id
+  // - GET /events/{id}/teams: grade 字段 = 'Elementary School'/'Middle School' 等
+  // ============================================================
+
+  /**
+   * 拉取赛事全部技能赛数据（自动分页），返回原始条目数组
+   */
+  async function fetchSkills(eventId, token) {
+    log(`开始获取技能赛数据: eventId = ${eventId}`);
+    if (!eventId || typeof eventId !== 'number') throw new Error('EventId 参数无效');
+    if (!token || typeof token !== 'string') throw new Error('Token 参数无效');
+
+    let allSkills = [];
+    let currentPage = 1;
+    let lastPage = 1;
+    try {
+      do {
+        const url = `${API_BASE}/events/${eventId}/skills?page=${currentPage}`;
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
+        });
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`HTTP ${response.status}: ${errorText}`);
+        }
+        const data = await response.json();
+        if (!data || !data.data || !Array.isArray(data.data)) break;
+        allSkills = allSkills.concat(data.data);
+        if (data.meta && data.meta.last_page) lastPage = data.meta.last_page;
+        currentPage++;
+      } while (currentPage <= lastPage);
+      logSuccess(`技能赛数据获取完成: 共 ${allSkills.length} 条`);
+      return allSkills;
+    } catch (error) {
+      logError(`技能赛数据获取失败: ${error.message}`);
+      return []; // 失败不影响主流程
+    }
+  }
+
+  /**
+   * 技能赛合并入库 vex_skills_ios: { 队号: {rank, driver:{attempts,best}, programming:{attempts,best}, total} }
+   * driver=手动, programming=自动; total = 手动最高 + 自动最高 (官方合并口径)
+   * 多赛事累积 merge 不清空, 同队以最新同步为准
+   */
+  function mergeSkillsToLocalStorage(apiSkillsData) {
+    if (!apiSkillsData || !Array.isArray(apiSkillsData)) return;
+    let skillsDb = {};
+    try { const ex = localStorage.getItem('vex_skills_ios'); if (ex) skillsDb = JSON.parse(ex); } catch (e) { skillsDb = {}; }
+
+    for (const s of apiSkillsData) {
+      const team = (s.team && s.team.name) || s.team_name || '';
+      if (!team) continue;
+      const cur = skillsDb[team] || { rank: null, driver: { attempts: 0, best: null }, programming: { attempts: 0, best: null }, total: null };
+      const slot = (s.type === 'programming') ? cur.programming : cur.driver;
+      const attempts = parseInt(s.attempts, 10);
+      slot.attempts = Number.isFinite(attempts) && attempts > 0 ? attempts : 0;
+      const score = parseFloat(s.score);
+      slot.best = Number.isFinite(score) ? score : null;
+      const rank = parseInt(s.rank, 10);
+      if (Number.isFinite(rank) && rank > 0) cur.rank = rank;
+      const d = cur.driver.best, p = cur.programming.best;
+      cur.total = (d !== null && p !== null) ? d + p : (d !== null ? d : (p !== null ? p : null));
+      skillsDb[team] = cur;
+    }
+
+    try {
+      localStorage.setItem('vex_skills_ios', JSON.stringify(skillsDb));
+      logSuccess(`技能赛数据合并完成: 本次 ${apiSkillsData.length} 条, 库中 ${Object.keys(skillsDb).length} 队`);
+    } catch (e) { logError('写入技能赛数据失败:', e); }
+  }
+
+  /**
+   * 拉取指定赛区的决赛排名（自动分页，路径参数为赛区 order）
+   */
+  async function fetchFinalistRankings(eventId, divisionOrder, token) {
+    log(`开始获取决赛排名: eventId = ${eventId}, divisionOrder = ${divisionOrder}`);
+    if (!eventId || typeof eventId !== 'number') throw new Error('EventId 参数无效');
+    if (!divisionOrder || typeof divisionOrder !== 'number') throw new Error('DivisionOrder 参数无效');
+    if (!token || typeof token !== 'string') throw new Error('Token 参数无效');
+
+    let allRankings = [];
+    let currentPage = 1;
+    let lastPage = 1;
+    try {
+      do {
+        const url = `${API_BASE}/events/${eventId}/divisions/${divisionOrder}/finalistRankings?page=${currentPage}`;
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
+        });
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`HTTP ${response.status}: ${errorText}`);
+        }
+        const data = await response.json();
+        if (!data || !data.data || !Array.isArray(data.data)) break;
+        allRankings = allRankings.concat(data.data);
+        if (data.meta && data.meta.last_page) lastPage = data.meta.last_page;
+        currentPage++;
+      } while (currentPage <= lastPage);
+      logSuccess(`决赛排名获取完成: 共 ${allRankings.length} 条`);
+      return allRankings;
+    } catch (error) {
+      logError(`决赛排名获取失败: ${error.message}`);
+      return []; // 失败不影响主流程 (赛事未开决赛时接口可能 404)
+    }
+  }
+
+  // 队伍号 -> 当前决赛排名来源赛区的队伍总数 (多赛区仲裁用)
+  // 与资格赛仲裁相反: 总决赛等更小赛区 (更"最终") 的名次优先保留
+  const finalistSourceSize = {};
+
+  /**
+   * 决赛排名合并入库:
+   * 1. 扁平库 vex_finalist_rankings_ios {队号: 名次} — 单队视图 🏆 决赛排名徽章数据源
+   * 2. 传入 divisionName 时额外存整分区决赛榜 vex_finalist_detail_ios
+   *    {赛区名: [{rank, team, name, score}]} — 排行榜「决赛」页签数据源
+   * 多赛区仲裁: 同队出现在赛区决赛与总决赛时, 保留队伍数更少 (更"最终") 赛区的名次
+   */
+  function mergeFinalistRankingsToLocalStorage(apiFinalistData, divisionName) {
+    if (!apiFinalistData || !Array.isArray(apiFinalistData)) return;
+    let rankDb = {};
+    try { const ex = localStorage.getItem('vex_finalist_rankings_ios'); if (ex) rankDb = JSON.parse(ex); } catch (e) { rankDb = {}; }
+
+    const parsed = [];
+    for (const entry of apiFinalistData) {
+      const team = (entry.team && entry.team.name) || entry.team_name || '';
+      const rank = parseInt(entry.rank, 10);
+      if (team && Number.isFinite(rank) && rank > 0) parsed.push({ team, rank });
+    }
+    for (const p of parsed) {
+      const src = finalistSourceSize[p.team];
+      if (src === undefined || parsed.length <= src) {
+        rankDb[p.team] = p.rank;
+        finalistSourceSize[p.team] = parsed.length;
+      }
+    }
+    try {
+      localStorage.setItem('vex_finalist_rankings_ios', JSON.stringify(rankDb));
+      logSuccess(`决赛排名合并完成: 本次 ${parsed.length} 条, 库中 ${Object.keys(rankDb).length} 条`);
+    } catch (e) { logError('写入决赛排名失败:', e); }
+
+    if (divisionName) {
+      let nameMap = {};
+      try { nameMap = JSON.parse(localStorage.getItem('vex_team_names_ios')) || {}; } catch (e) { nameMap = {}; }
+      const standings = [];
+      for (const entry of apiFinalistData) {
+        const team = (entry.team && entry.team.name) || entry.team_name || '';
+        const rank = parseInt(entry.rank, 10);
+        if (!team || !Number.isFinite(rank) || rank <= 0) continue;
+        const score = parseFloat(entry.high_score);
+        standings.push({ rank, team, name: nameMap[team] || '', score: Number.isFinite(score) ? score : null });
+      }
+      standings.sort((a, b) => a.rank - b.rank);
+      let detail = {};
+      try { detail = JSON.parse(localStorage.getItem('vex_finalist_detail_ios')) || {}; } catch (e) { detail = {}; }
+      detail[divisionName] = standings;
+      try {
+        localStorage.setItem('vex_finalist_detail_ios', JSON.stringify(detail));
+        logSuccess(`决赛榜单已更新: ${divisionName} (${standings.length} 队)`);
+      } catch (e) { logError('写入决赛榜单失败:', e); }
+    }
+  }
+
+  /**
+   * 拉取赛事队伍年级映射（自动分页）: { 队号: grade } — 技能赛榜小学/初中过滤用
+   */
+  async function fetchTeamGrades(eventId, token) {
+    if (!eventId || typeof eventId !== 'number') throw new Error('EventId 参数无效');
+    if (!token || typeof token !== 'string') throw new Error('Token 参数无效');
+    const gradeMap = {};
+    let currentPage = 1;
+    let lastPage = 1;
+    try {
+      do {
+        const url = `${API_BASE}/events/${eventId}/teams?page=${currentPage}`;
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
+        });
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`HTTP ${response.status}: ${errorText}`);
+        }
+        const data = await response.json();
+        if (!data || !data.data || !Array.isArray(data.data)) break;
+        for (const t of data.data) {
+          if (t && t.number && t.grade) gradeMap[t.number] = t.grade;
+        }
+        if (data.meta && data.meta.last_page) lastPage = data.meta.last_page;
+        currentPage++;
+      } while (currentPage <= lastPage);
+      logSuccess(`队伍年级获取完成: ${Object.keys(gradeMap).length} 队`);
+      return gradeMap;
+    } catch (error) {
+      logError(`队伍年级获取失败: ${error.message}`);
+      return {}; // 失败不影响主流程, 技能赛榜仅显示"全部"
+    }
+  }
+
+  /**
+   * 队伍年级映射合并入库（多赛事累积 merge，不清空旧数据）
+   */
+  function mergeTeamGradesToLocalStorage(apiGradeMap) {
+    if (!apiGradeMap || typeof apiGradeMap !== 'object') return;
+    let gradeMap = {};
+    try { gradeMap = JSON.parse(localStorage.getItem('vex_team_grades_ios')) || {}; } catch (e) { gradeMap = {}; }
+    Object.assign(gradeMap, apiGradeMap);
+    try {
+      localStorage.setItem('vex_team_grades_ios', JSON.stringify(gradeMap));
+      logSuccess(`队伍年级映射已入库: 共 ${Object.keys(gradeMap).length} 队`);
+    } catch (e) {
+      logError('写入队伍年级映射失败:', e);
+    }
+  }
+
   /**
    * 赛区名称极简格式化
    * 输入: eventName (如 '明德启智杯...VIQRC...'), divName (如 'Division A')
@@ -483,6 +798,9 @@
     const dn = divName || '';
     if (/Final/i.test(dn)) {
       div = 'Final';
+    } else if (/Default/i.test(dn)) {
+      // 单赛区赛事 (Default Division) 不显示分区名, 只保留学段
+      div = '';
     } else if (/Division\s+/i.test(dn)) {
       div = dn.replace(/Division\s+/i, '').trim() + '区';
     } else if (dn) {
@@ -493,8 +811,8 @@
     if (level && div) return level + ' ' + div;
     if (level) return level;
     if (div) return div;
-    // 兜底: 截断原名
-    return (divName || '默认赛区').substring(0, 15);
+    // 兜底 (无分区信息/Default 单赛区)
+    return '默认赛区';
   }
 
   /**
@@ -521,6 +839,16 @@
         mergeTeamNamesToLocalStorage(await fetchTeamNames(eventInfo.id, token));
       } catch (e) { logError('队名抓取失败:', e.message); }
 
+      // 1.6 抓取队伍年级映射（技能赛榜小学/初中过滤用，失败不影响主流程）
+      try {
+        mergeTeamGradesToLocalStorage(await fetchTeamGrades(eventInfo.id, token));
+      } catch (e) { logError('年级抓取失败:', e.message); }
+
+      // 1.7 抓取技能赛数据（赛事级接口，每赛事一次，失败不影响主流程）
+      try {
+        mergeSkillsToLocalStorage(await fetchSkills(eventInfo.id, token));
+      } catch (e) { logError('技能赛抓取失败:', e.message); }
+
       let allMatches = [];
 
       // 2. 遍历每个赛区
@@ -539,6 +867,15 @@
           mergeRankingsToLocalStorage(rankings, formatDivisionName(eventInfo.name, div.name));
         } catch (e) {
           logError(`赛区 ${div.name} 排名获取失败:`, e.message);
+        }
+
+        // 3.5 同步该赛区的决赛排名（路径用赛区 order；未开决赛时接口可能为空/404，不影响主流程）
+        try {
+          const divOrder = div.order || div.id;
+          const finalistRankings = await fetchFinalistRankings(eventInfo.id, divOrder, token);
+          mergeFinalistRankingsToLocalStorage(finalistRankings, formatDivisionName(eventInfo.name, div.name));
+        } catch (e) {
+          logError(`赛区 ${div.name} 决赛排名获取失败:`, e.message);
         }
       }
 
@@ -571,24 +908,18 @@
       return 0;
     }
 
+    resolveMatchIds(apiMatchesData);
+
     let newGlobalMatches = [];
 
     for (const apiMatch of apiMatchesData) {
-      let matchId = apiMatch.matchnum ? `Q${apiMatch.matchnum}` : (apiMatch.name || '');
+      const matchId = apiMatch._matchId || apiMatch.name || '';
       if (!matchId) continue;
 
       let field = apiMatch.field || apiMatch.fieldname || '默认场地';
 
-      let time = '待定';
-      if (apiMatch.scheduled) {
-        try {
-          const d = new Date(apiMatch.scheduled);
-          const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
-          const period = d.getHours() >= 12 ? 'PM' : 'AM';
-          const h = d.getHours() > 12 ? d.getHours() - 12 : (d.getHours() === 0 ? 12 : d.getHours());
-          time = `周${dayNames[d.getDay()]} ${h}:${d.getMinutes().toString().padStart(2, '0')} ${period}`;
-        } catch (e) { time = '待定'; }
-      }
+      // 决赛场次 scheduled 为 null, 回退用 started (实际开赛时间)
+      const time = formatApiTime(apiMatch.scheduled || apiMatch.started);
 
       let team1 = 'TBD', team2 = 'TBD';
       if (apiMatch.alliances && Array.isArray(apiMatch.alliances)) {
@@ -608,7 +939,7 @@
       // 优先使用调用者设置的 _divisionName，否则回退为默认
       const division = apiMatch._divisionName || '默认赛区';
 
-      newGlobalMatches.push({ matchId, field, time, timeValue: 0, team1, team2, division });
+      newGlobalMatches.push({ matchId, field, time, timeValue: parseLocalTimeToMinutes(time), team1, team2, division });
     }
 
     log(`生成了 ${newGlobalMatches.length} 场比赛`);
@@ -633,6 +964,12 @@
     fetchRankings,
     fetchTeamNames,
     mergeTeamNamesToLocalStorage,
+    fetchTeamGrades,
+    mergeTeamGradesToLocalStorage,
+    fetchSkills,
+    mergeSkillsToLocalStorage,
+    fetchFinalistRankings,
+    mergeFinalistRankingsToLocalStorage,
     syncScoresToLocal,
     mergeRankingsToLocalStorage,
     runFullSync,
@@ -640,13 +977,18 @@
     formatDivisionName
   };
 
-  log('API 通信模块已加载 (多赛区 + 排名版)');
+  log('API 通信模块已加载 (多赛区 + 排名 + 决赛 + 技能赛版)');
   log('可用函数:');
   log('  - VexApiSync.fetchEventId(sku, token)        -> { id, name, divisions }');
   log('  - VexApiSync.fetchMatchesData(eventId, divId, token)');
   log('  - VexApiSync.fetchRankings(eventId, divId, token)');
+  log('  - VexApiSync.fetchFinalistRankings(eventId, divOrder, token)');
+  log('  - VexApiSync.fetchSkills(eventId, token)');
+  log('  - VexApiSync.fetchTeamNames(eventId, token) / fetchTeamGrades(eventId, token)');
   log('  - VexApiSync.syncScoresToLocal(apiMatchesData)');
-  log('  - VexApiSync.mergeRankingsToLocalStorage(apiRankingsData)');
+  log('  - VexApiSync.mergeRankingsToLocalStorage(apiRankingsData, divisionName)');
+  log('  - VexApiSync.mergeFinalistRankingsToLocalStorage(apiData, divisionName)');
+  log('  - VexApiSync.mergeSkillsToLocalStorage(apiSkillsData)');
   log('  - VexApiSync.runFullSync(sku, token)');
   log('  - VexApiSync.generateScheduleFromApi(apiMatchesData)');
 

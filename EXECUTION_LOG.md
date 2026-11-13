@@ -5,6 +5,120 @@
 
 ---
 
+### 🕒 [2026-11-14]
+
+**🎯 任务目标**: 决赛修复真机验收通过后的三个新需求 — ①决赛排名与资格赛排名区分 ②决赛场次视觉标识 ③新增技能赛排行榜（小学/初中切换 + 队伍技能详情）
+
+**📊 执行结果**: ✅ 双端完成，真实赛事 VE-IQ-26-66973 端到端验证通过，回归 274/274
+
+---
+
+#### [接口发现]（从平台前端 SPA bundle 反查出未公开端点，再打真实接口验证）
+
+| 端点 | 说明 |
+|------|------|
+| `GET /events/{id}/skills` | 技能赛，分页。条目 `{type:'driver'\|'programming', attempts, score, rank, team{id,name,code}}`；**同队两条 type 共享同一官方合并排名**（rank 按手动最高+自动最高的总分排定）；attempts 可为 0~3；team.code = 'ES'/'MS' |
+| `GET /events/{id}/divisions/{order}/finalistRankings` | **决赛官方榜**，分页。条目 `{rank, team{name}, high_score}`，含并列名次。⚠️ 路径参数是赛区 **order** 不是 id |
+| `GET /events/{id}/teams` 的 `grade` | 'Elementary School' / 'Middle School' / 'High School'（技能赛榜小学/初中过滤数据源） |
+
+#### [实现改动]
+
+**数据层**（iOS 外部 js / iOS 内联 / Android js 三份同步）:
+1. `fetchSkills(eventId, token)` + `mergeSkillsToLocalStorage(data)` → `vex_skills(_ios)` = `{队号: {rank, driver:{attempts,best}, programming:{attempts,best}, total}}`；driver=手动，programming=自动；total = 两者最高分之和（官方合并口径）；多赛事累积
+2. `fetchFinalistRankings(eventId, divisionOrder, token)` + `mergeFinalistRankingsToLocalStorage(data, divisionName)` → ① 扁平 `vex_finalist_rankings(_ios)` `{队号: 名次}`；② 传 divisionName 时存 `vex_finalist_detail(_ios)` `{赛区名: [{rank,team,name,score}]}`
+3. 多赛区决赛排名仲裁 `finalistSourceSize`：**与资格赛仲裁方向相反** — 总决赛等更小赛区（更"最终"）的名次优先保留
+4. `fetchTeamGrades(eventId, token)` + `mergeTeamGradesToLocalStorage(map)` → `vex_team_grades(_ios)` 多赛事累积
+5. `runFullSync` / `pullFullSchedule`：队名之后追加年级+技能赛抓取（每赛事一次），赛区循环内追加决赛排名（`div.order \|\| div.id`）
+
+**UI 层**（iOS / Android index.html 平移，Key 后缀差异）:
+1. 底部导航新增第 4 个 Tab「🎯 技能」→ 技能赛排行榜页：名次 🥇🥈🥉/#N + 队号 + 队名 + **自动 X（N 场）/ 手动 Y（M 场）/ 总分** 三列；右上角「全部/小学/初中」年级过滤（grade 映射 Elementary/Middle/High）；纯展示列表不跳转（信息行内已完整，用户反馈跳转到资格赛视图逻辑奇怪，验收时移除）
+2. 排行榜页头部新增「资格赛 / 🏆 决赛」数据源切换（`setRankMode`）：决赛模式渲染 `renderFinalsLeaderboard`（紫色名次 + 决赛最高分列，支持赛区过滤，不依赖本地赛程）
+3. **Tab 改名（用户验收反馈）**：第三个 Tab「🏆 排行」→「🏆 联队」（标题同步改「联队排行榜」），与「技能赛排行榜」区分开
+3. 单队视图：双徽章「🏅 资格赛 #N」(金黄) + 「🏆 决赛 #N」(紫金)；新增 🎯 技能赛摘要卡（排名/总分/自动分/手动分/各打几场）
+4. 决赛场次卡片标识：matchId 以 F 开头 → 金色左边框 + 「🏆 决赛」金色徽章
+5. `clearAllData` / DOMContentLoaded / 同步与拉取刷新点全部接入新 Key 与 `renderSkillsBoard`
+
+#### [真实赛事端到端验证]（VE-IQ-26-66973，界面截图逐项确认）
+
+- 一键拉取：123 场赛程（含决赛 12）+ 技能赛 23 队 + 决赛排名 24 队 + 年级 ES 20 / MS 15
+- 技能赛榜：🥇2059X 自动 134(2场)+手动 158(2场)=总分 292，与官方一致；「初中」过滤后仅剩 MS 队伍（10 支）
+- 决赛榜切换：🥇5677A/5031A 并列 312 → 🥈9928W/1266X 并列 306，与官方 finalistRankings 并列名次一致
+- 单队视图（2059X）：🏅 资格赛 #4 + 🏆 决赛 #3 双徽章 + 技能赛卡（#1 / 总分 292 / 自动 134 2场 / 手动 158 2场）；决赛卡片 F11 金色左边框 + 🏆 决赛徽章，比分 292 已入库
+
+#### [回归测试]
+
+`.zcode/test_rankings.js` 新增测试 9（fetchSkills 分页 + 手动/自动/总分合并 + 多赛事累积）、测试 10（决赛排名合并 + 总决赛小赛区优先仲裁 + 分区榜单）、测试 11（年级分页抓取 + 合并）；runFullSync 端到端补断言（技能/决赛排名/年级入库 + 仲裁）。**274/274 全过**（三份拷贝 × 11 组场景）。
+
+#### [存储新增]
+
+| Key | 格式 | 端 |
+|-----|------|-----|
+| `vex_skills_ios` / `vex_skills` | `{ 队号: {rank, driver:{attempts,best}, programming:{attempts,best}, total} }` | iOS / Android |
+| `vex_finalist_rankings_ios` / `vex_finalist_rankings` | `{ 队号: 决赛名次 }` | iOS / Android |
+| `vex_finalist_detail_ios` / `vex_finalist_detail` | `{ 赛区名: [{rank, team, name, score}] }` | iOS / Android |
+| `vex_team_grades_ios` / `vex_team_grades` | `{ 队号: grade }`（多赛事累积） | iOS / Android |
+
+#### [异常/Bug 记录]
+
+无。前一天调试触发的 Cloudflare 限流已自然解除；测试浏览器验证数据已清理（保留 Token/SKU 配置）。
+
+#### [下一步建议]
+
+1. 用户真机验收：更新页面 → 「一键拉取完整赛程」→ 技能 Tab / 排行榜「决赛」切换 / 单队视图双徽章与决赛卡片
+2. 验收通过 → Android 打包（manifest 已升 2.4/code 103）→ git commit + push
+
+---
+
+
+### 🕒 [2026-11-13]
+
+**🎯 任务目标**: 修复「资格赛后看不到决赛」— 决赛赛程/比分全部缺失
+
+**📊 执行结果**: ✅ 代码修复完成，三份拷贝同步，回归测试 193/193 全过；真机端到端验证见文末说明
+
+---
+
+#### [问题定位]（用户报告：资格赛成绩排名正常，决赛赛程/比分/排名都没有）
+
+**真实 API 探测**（Token + 浏览器环境实测 VE-IQ-26-66973 单赛区 123 场 / VE-IQ-26-65732 多赛区 314 场）：
+
+| 发现 | 说明 |
+|------|------|
+| **决赛 = `round: 15`** | 资格赛 = `round: 2`（TeamWork #N），决赛场次名 `Match #1-N` |
+| **决赛 matchnum 从 1 重新编号** | 单赛区赛事：资格赛 1~111，决赛 1~12 —— 与资格赛**撞号** |
+| 决赛 `scheduled: null` | 但有 `started`（实际开赛时间）可回退 |
+| 多赛区赛事 | 每个赛区各自有 round15 决赛（1..N）+ 跨赛区总决赛赛区（如 ES FINALS，2 场）；同一队伍可能两边都打（65732 实测：总决赛队伍 6966V/9699G 也打了 ES A 决赛第 11 场），**是否撞号纯属运气** |
+| 排名接口 | 决赛后仍返回资格赛榜（35 队 2 页），决赛名次靠决赛场次比分体现，无独立榜单 |
+
+**根因**：`generateScheduleFromApi` / `syncScoresToLocal` 把所有场次一律编成 `Q{matchnum}`。决赛 matchnum 重编后变成 Q1..Q12 → ① 决赛与资格赛比分键 `Q1_队号` 互相覆盖（比过决赛再同步会污染资格赛比分）；② 用户先拉赛程后开决赛的时序下，只点「云端同步比分」不重建赛程 → 决赛在本地赛程中根本不存在 → **看不到决赛**。
+
+#### [修复方案]（v2.3 决赛独立编号，三份拷贝同步）
+
+1. 新增 `resolveMatchIds(apiMatchesData)`（模块内部，幂等可重复调用）：
+   - 资格赛（round 2 等）→ `Q{matchnum}` 不变（兼容 PDF 导入与历史数据）
+   - 决赛（`round === 15` 或名称/赛区名含 Final）→ 单赛区 `F{matchnum}`；多赛区 `F{赛区序号}-{matchnum}`（按赛区首次出现顺序）；同赛区重号兜底追加 `(2)(3)`
+   - 结果写入 `m._matchId`，两个消费方（syncScoresToLocal / generateScheduleFromApi）统一改读该字段
+2. 新增 `formatApiTime(iso)`：`scheduled` 为 null 时回退 `started`，决赛时间不再显示「待定」
+3. 新增 `parseLocalTimeToMinutes()`（与 UI 端 parseTimeToMinutes 同算法）：`timeValue` 从固定 0 改为真实值，单队视图排序生效（决赛排在资格赛后）
+4. `formatDivisionName`：`Default Division`（单赛区赛事）→ 只显示学段或「默认赛区」，不再显示「Default区」
+
+#### [回归测试]（`.zcode/test_rankings.js`）
+
+新增测试 7（单赛区决赛编号：F1/F2 独立于 Q1/Q2、Q1 不被污染、name 兜底、完赛标记分离、started 时间回退、timeValue 计算、幂等）+ 测试 8（多赛区 F1-1/F2-1/F3-1 消歧、同队跨赛区不覆盖、赛区标签）。**193/193 全过**（三份拷贝 × 8 组场景）。
+
+#### [调试插曲：Cloudflare 边缘对非浏览器客户端剥 Authorization]（排查时发现，非 App 缺陷）
+
+- 同一 Token：浏览器页面内 fetch → **200**；curl / curl_cffi(Chrome TLS 指纹) → **401 Unauthenticated**（边缘层剥掉了 Authorization 头，Laravel 正常应答）
+- 连续自动化请求后会触发边缘限流：浏览器 fetch 也变 "Failed to fetch"（响应无 CORS 头），顶层导航正常（302 跳登录）
+- **调试此类 API 必须走浏览器环境**（本地起 http.server + 浏览器页面内 fetch，与 App 运行时一致）；curl 只能用于无鉴权探测。触发限流后需等待冷却
+
+#### [真机端到端说明]
+
+本次验证环境（Mac 测试浏览器）在完成数据结构探测后被 Cloudflare 限流，完整的 UI 级一键拉取验证改由 **用户真机执行**：更新代码后打开 App → 「一键拉取完整赛程」→ 单队视图应出现 F1..F12 决赛卡片（含比分、时间）且资格赛比分不被污染；排行榜仍为资格赛官方榜。数据管线逻辑已由真实结构 mock 的回归测试覆盖。
+
+---
+
+
 ### 🕒 [2026-10-28 18:30:00]
 
 **🎯 任务目标**: 操控 HBuilderX 云打包（用户授权辅助功能权限后）；受阻后交接给用户手动打包

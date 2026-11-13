@@ -1,20 +1,38 @@
 # 📘 VEX 赛程管理助手 (VEX Schedule Master) - 开发者交接文档
 
-> **版本**: v2.2 (双端) | **最后更新**: 2026-10-28 | **维护者**: Kelo
+> **版本**: v2.4 (双端) | **最后更新**: 2026-11-14 | **维护者**: Kelo
 
 ---
 
-## 0. 当前状态快照 (⭐ 接手必读，2026-10-28)
+## 0. 当前状态快照 (⭐ 接手必读，2026-11-14)
 
-### 版本状态：v2.2 双端迭代完成，待打包 → 提交
+### 版本状态：v2.4 决赛排名/技能赛排行榜迭代完成
 
-本轮迭代 = **v2.1.1 排名修正 + v2.2 分区排行榜**，双端代码已全部完成，**尚未 git commit**。测试与操作明细全部记录在 `EXECUTION_LOG.md`（最新在上），本文件只保留交接必需信息。
+本轮迭代 = **v2.3 决赛支持（真机已验收）+ v2.4 决赛排名区分/决赛标识/技能赛排行榜**，双端代码已全部完成，**尚未 git commit**。测试与操作明细全部记录在 `EXECUTION_LOG.md`（最新在上），本文件只保留交接必需信息。
 
 | 迭代 | 内容 | 状态 |
 |------|------|------|
-| v2.1.1 排名修正 | 排名接口自动分页（不丢第 2 页后队伍）、`rankingsort1`(积分) 不再当排名、多赛区排名冲突仲裁、`window.VexApiSync` 挂载语句修复 | ✅ 双端完成，真实赛事验证 |
-| v2.2 分区排行榜 | 底部「总表」→「🏆 排行」官方分区积分榜（VEX Via 样式） | ✅ 双端完成，真实赛事 VE-IQ-26-65732 验证 |
-| Android 打包 | manifest 已升 `2.2` / code `101`；⚠️ 公共测试证书被 DCloud 停用，见下方打包指南 | ⬜ 用户手动打包中 |
+| v2.1.1 排名修正 | 排名接口自动分页、`rankingsort1` 不再当排名、多赛区排名冲突仲裁、`window.VexApiSync` 挂载语句修复 | ✅ 双端完成，真实赛事验证 |
+| v2.2 分区排行榜 | 底部「总表」→「🏆 排行」官方分区积分榜（VEX Via 样式） | ✅ 双端完成，真实赛事验证 |
+| v2.3 决赛支持 | 决赛（round=15）独立编号 `F{N}` / 多赛区 `F{赛区序号}-{N}`，比分键不再与资格赛撞号；决赛时间回退 `started` | ✅ 双端完成，**真机已验收**（66973 决赛正常显示） |
+| v2.4 决赛排名+技能赛 | 排行榜「资格赛/决赛」切换（finalistRankings 接口）；单队视图双徽章（资格赛金黄/决赛紫金）+ 决赛卡片金色标识；新「🎯 技能」Tab 技能赛排行榜（全部/小学/初中过滤 + 自动/手动分数与场次，纯展示不跳转）；第三个 Tab 改名「🏆 联队」；队伍年级抓取 | ✅ 双端完成，真实赛事 VE-IQ-26-66973 端到端验证，回归 274/274 |
+| Android 打包 | manifest 已升 `2.4` / code `103`；⚠️ 公共测试证书被 DCloud 停用，见下方打包指南 | ⬜ 用户手动打包 |
+
+### v2.4 决赛排名与技能赛（要点，改动前必读）
+
+* **决赛排名接口**：`GET /events/{id}/divisions/{order}/finalistRankings` — ⚠️ 路径参数是赛区 **order**（`div.order || div.id`），不是赛区 id。条目 `{rank, team{name}, high_score}`，含并列名次
+* **技能赛接口**：`GET /events/{id}/skills`（赛事级，不分区）— 条目按 `type: 'driver'(手动) / 'programming'(自动)` 分条，含 `attempts`(场次) / `score`(最高分) / `rank`；**同队两条共享同一官方合并排名**（按手动最高+自动最高总分排定）
+* **年级**：`/events/{id}/teams` 的 `grade` 字段（'Elementary School'/'Middle School'/'High School'）→ 技能赛榜小学/初中过滤
+* 排行榜数据源切换：`setRankMode('quals'|'finals')`；技能榜过滤：`setSkillFilter('All'|'ES'|'MS')`
+* 多赛区决赛排名仲裁方向**与资格赛相反**：更小赛区（总决赛，更"最终"）的名次优先保留
+
+### v2.3 决赛支持（修复要点，改动前必读）
+
+* **背景**：`matchnum` 每个赛区各自从 1 编号；决赛 `round=15` 的 matchnum 与资格赛（`round=2`）撞号，旧逻辑全编成 `Q{N}` → 决赛比分键 `Q1_队号` 覆盖资格赛、赛程无法正确呈现决赛
+* **新规则**：资格赛 `Q{N}` 不变；决赛单赛区 `F{N}`、多赛区 `F{赛区序号}-{N}`（同一队伍可能同时打本赛区决赛 + 跨赛区总决赛，两边 matchnum 都从 1 重编）
+* 核心实现：模块内 `resolveMatchIds(apiMatchesData)` 统一解析并写入 `m._matchId`，`syncScoresToLocal` / `generateScheduleFromApi` 都改读它；幂等可重复调用
+* 决赛 `scheduled` 为 null → 回退 `started` 显示；`timeValue` 按时间实算（排序生效）
+* 用户升级后必须点一次「一键拉取完整赛程」重建赛程（「云端同步比分」不重建赛程，决赛卡片才会出现）
 
 ### v2.2 分区排行榜（新功能要点）
 
@@ -43,10 +61,10 @@ cli pack status
 
 ### 接手必读
 
-* **改动验证**：任何涉及排名/同步逻辑的修改，必须跑 `node .zcode/test_rankings.js`（三份代码拷贝 × 6 组场景回归测试，0 依赖 Node 脚本）
+* **改动验证**：任何涉及排名/同步/场次 ID/技能赛/决赛排名逻辑的修改，必须跑 `node .zcode/test_rankings.js`（三份代码拷贝 × 11 组场景 274 断言回归测试，0 依赖 Node 脚本）
 * **测试/操作明细**：见 `EXECUTION_LOG.md`（最新在上）；本文件不记录测试日志
 * **未提交清单**：`VexMaster/index.html`、`VexMaster/vex-api-sync.js`、`VEX_Master_Android/index.html`、`VEX_Master_Android/vex-api-sync.js`、`VEX_Master_Android/manifest.json`、两份 md 文档、`.zcode/`（测试脚本）
-* 双端红线不变：代码严禁互混；iOS 的 `index.html` 内联副本与 `vex-api-sync.js` 是同一逻辑两份拷贝，改一处必须同步另一处
+* 双端红线不变：代码严禁互混；iOS 的 `index.html` 内联副本与 `vex-api-sync.js` 是同一逻辑两份拷贝，改一处必须同步另一处（**场次 ID 解析、比分键规则属于三份拷贝共用的核心逻辑，务必逐字一致**）
 
 ---
 
@@ -182,6 +200,10 @@ VEX_Schedule_Master/
 | `vex_rankings` | `Object` | 排名数据库，格式: `{ "53168C": 1, "12345A": 12 }` |
 | `vex_rankings_detail` | `Object` | 分区官方榜单，格式: `{ "小学组 ES B": [{rank, team, name, avg}] }` |
 | `vex_team_names` | `Object` | 队名映射，格式: `{ "5366A": "ALCTRON VEX CLUB" }`（多赛事累积） |
+| `vex_skills` | `Object` | 技能赛库 (v2.4)，格式: `{ "2059X": {rank, driver:{attempts,best}, programming:{attempts,best}, total} }` |
+| `vex_finalist_rankings` | `Object` | 决赛排名库 (v2.4)，格式: `{ "5677A": 1 }` |
+| `vex_finalist_detail` | `Object` | 决赛分区榜单 (v2.4)，格式: `{ "默认赛区": [{rank, team, name, score}] }` |
+| `vex_team_grades` | `Object` | 队伍年级映射 (v2.4)，格式: `{ "730M": "Elementary School" }`（多赛事累积） |
 
 ### iOS 端字典
 
@@ -197,6 +219,10 @@ VEX_Schedule_Master/
 | `vex_rankings_ios` | `Object` | 排名数据库，格式: `{ "53168C": 1, "12345A": 12 }` |
 | `vex_rankings_detail_ios` | `Object` | 分区官方榜单，格式: `{ "小学组 ES B": [{rank, team, name, avg}] }` |
 | `vex_team_names_ios` | `Object` | 队名映射，格式: `{ "5366A": "ALCTRON VEX CLUB" }`（多赛事累积） |
+| `vex_skills_ios` | `Object` | 技能赛库 (v2.4)，格式: `{ "2059X": {rank, driver:{attempts,best}, programming:{attempts,best}, total} }` |
+| `vex_finalist_rankings_ios` | `Object` | 决赛排名库 (v2.4)，格式: `{ "5677A": 1 }` |
+| `vex_finalist_detail_ios` | `Object` | 决赛分区榜单 (v2.4)，格式: `{ "默认赛区": [{rank, team, name, score}] }` |
+| `vex_team_grades_ios` | `Object` | 队伍年级映射 (v2.4)，格式: `{ "730M": "Elementary School" }`（多赛事累积） |
 
 ### 单场比赛数据结构
 
@@ -232,6 +258,9 @@ ${matchId}_${team}  →  如 "Q1_53168C"
 | `fetchMatchesData(eventId, divisionId, token)` | 获取指定赛区比赛数据 (自动分页) | `GET /events/{eventId}/divisions/{divId}/matches` |
 | `fetchRankings(eventId, divisionId, token)` | 获取指定赛区排名数据（**自动分页**，返回整赛区全量排名） | `GET /events/{eventId}/divisions/{divId}/rankings` |
 | `fetchTeamNames(eventId, token)` | 拉取全赛事队名映射 `{队号: 队名}`（自动分页；排名接口不含队名，队名只能从这里拿） | `GET /events/{eventId}/teams` |
+| `fetchTeamGrades(eventId, token)` / `mergeTeamGradesToLocalStorage(map)` | 拉取/合并队伍年级映射 `{队号: grade}`（v2.4，技能赛榜小学/初中过滤用） | `GET /events/{eventId}/teams` |
+| `fetchSkills(eventId, token)` / `mergeSkillsToLocalStorage(data)` | 拉取/合并技能赛数据（v2.4，driver=手动 / programming=自动 / total=两者最高分之和，多赛事累积） | `GET /events/{eventId}/skills` |
+| `fetchFinalistRankings(eventId, divisionOrder, token)` / `mergeFinalistRankingsToLocalStorage(data, divisionName)` | 拉取/合并**决赛排名**（v2.4，扁平库给单队徽章 + 分区榜单给排行榜决赛页签；⚠️ 路径参数是赛区 order） | `GET /events/{eventId}/divisions/{order}/finalistRankings` |
 | `syncScoresToLocal(apiMatches)` | 比分静默合并到本地 | — |
 | `mergeTeamNamesToLocalStorage(map)` | 队名映射累积入库 (`vex_team_names(_ios)`，多赛事 merge 不清空) | — |
 | `mergeRankingsToLocalStorage(apiRankings, divisionName)` | ① 扁平排名库 `{队号: 名次}`（带多赛区仲裁）；② 传入 `divisionName` 时额外写**分区官方榜单**到 `vex_rankings_detail(_ios)`，每次同步整赛区覆盖 | — |
@@ -239,12 +268,17 @@ ${matchId}_${team}  →  如 "Q1_53168C"
 | `runFullSync(sku, token)` | 一键同步 (单 SKU：队名 → 多赛区遍历比赛+排名+榜单 → 比分) | — |
 | `formatDivisionName(eventName, divName)` | 赛区名称极简净化 (如 `小学组 A区`) | — |
 
-**VEX API 实测字段事实（2026-10-28 用真实赛事验证，编码时勿凭猜测）**：
+**VEX API 实测字段事实（2026-10-28 / 11-13 / 11-14 用真实赛事验证，编码时勿凭猜测）**：
 
-* 排名接口条目：`rank`(名次)、`team.name`(队号)、`average_points`(**官方 Avg. Points**，如 279.67)、`high_score`、`wins/losses/ties`、`wp/ap/sp`。**排名接口不含队名**（team 对象只有 id/name/code）
-* 队伍接口条目：`number`(队号)、`team_name`(队名)、`organization`、`grade`、`location`
+* **比赛接口条目**：`matchnum`(**每赛区各自从 1 编号**)、`round`(**2=资格赛 TeamWork #N，15=决赛 Match #1-N**)、`instance`、`name`、`field`、`scheduled`(决赛为 null)、`started`(实际开赛时间，决赛用它)、`scored`(不可靠，比分判断用 score>0)、`division{id,name}`(内嵌赛区对象)、`alliances[]`(`color`/`score`/`teams[]`，决赛每联盟可能 1~2 队)
+* **决赛判定**：`round === 15` 是主信号；`name`/赛区名含 `Final` 为辅助信号（见 `resolveMatchIds`）
+* 排名接口条目：`rank`(名次)、`team.name`(队号)、`average_points`(**官方 Avg. Points**，如 279.67)、`high_score`、`wins/losses/ties`、`wp/ap/sp`。**排名接口不含队名**（team 对象只有 id/name/code）；**决赛后仍返回资格赛榜**，决赛排名要用 finalistRankings 接口
+* **决赛排名接口** `divisions/{order}/finalistRankings`：`{rank, team{name}, high_score}`，**含并列名次**（两队同分同 rank），路径参数是赛区 **order 不是 id**
+* **技能赛接口** `/events/{id}/skills`：按 `type: 'driver'|'programming'` 分条，`{attempts(0~3), score(最高分), rank, team{id,name,code}}`；同队两条 type 共享同一官方合并排名；赛事级接口不分区
+* 队伍接口条目：`number`(队号)、`team_name`(队名)、`organization`、`grade`('Elementary School'/'Middle School'/'High School')、`location`
 * 均分提取优先级：`average_points` > `avg_score` > `average` > `rankingsort1`（仅兜底）
 * 认证：Bearer Token；未认证请求一律 401/404。**凭猜测写的字段名在真实接口上就是 null**——改动前先打真实接口确认
+* **调试方式**：本地 `python3 -m http.server 8899` + 浏览器页面内 fetch（与 App 同构）。**curl/curl_cffi 会被 Cloudflare 边缘剥掉 Authorization 头返回 401**（见踩坑 #16），只能用于无鉴权探测；未公开端点可从平台 SPA bundle (`events.vex.com/build/assets/app-*.js`) grep `getPaged(` 反查
 
 **多赛区嵌套遍历**：`runFullSync` 内部先获取 `eventInfo.divisions` 列表，再对每个赛区独立调用 `fetchMatchesData` + `fetchRankings`，最后合并全量数据统一写入。队名映射每个赛事只抓一次（赛区循环外）。
 
@@ -330,6 +364,21 @@ ${matchId}_${team}  →  如 "Q1_53168C"
     - 本地验证：仓库根目录 `python3 -m http.server 8899`，访问 `http://127.0.0.1:8899/VexMaster/`（iOS）/ `http://127.0.0.1:8899/VEX_Master_Android/`（Android，普通浏览器可加载，`plus.*` 只在海报保存时调用）
     - 验证注入的 mock 数据会覆盖 LocalStorage，正式使用前点「清空所有数据」+ 重新云端拉取
     - iOS 端务必用无痕窗口：Safari 缓存黑洞（见 #2）会让人误判「改了没生效」
+
+### 🔴 决赛数据知识（2026-11-13 增补，v2.3 修复的核心坑）
+
+15. **决赛 matchnum 与资格赛撞号（v2.3 修复）**
+    - **症状**：决赛开始后点「云端同步比分」，决赛比分写进 `Q{N}_队号` 键**覆盖资格赛比分**；本地赛程里根本没有决赛卡片（赛程只在「一键拉取」时重建）
+    - **原因**：`matchnum` 每赛区各自从 1 编号，决赛（`round=15`）重编为 1..M，旧逻辑一律编成 `Q{matchnum}`
+    - **修复**：`resolveMatchIds` 统一解析 — 资格赛 `Q{N}` 不变，决赛单赛区 `F{N}`、多赛区 `F{赛区序号}-{N}`；`syncScoresToLocal`/`generateScheduleFromApi` 只读 `m._matchId`
+    - **红线**：不要把场次 ID 退回 `Q{matchnum}` 拼接；不要在两个消费方各自实现编号逻辑（必须走同一个 `resolveMatchIds`，幂等设计）
+    - **升级注意**：老用户升级后必须点一次「一键拉取完整赛程」才会出现决赛卡片；历史上被决赛污染过的 `Q{N}_队号` 比分会在下次同步时被资格赛真实比分自动覆盖修复
+
+16. **Cloudflare 边缘会剥掉非浏览器客户端的 Authorization 头**
+    - **症状**：同一 Token，浏览器页面内 fetch = 200，curl / curl_cffi(模拟 Chrome TLS) = `401 {"message":"Unauthenticated."}`（不是 Token 失效！）
+    - **原因**：events.vex.com 前面有 Cloudflare Bot Management，对判定为非浏览器的请求剥离 Authorization 后再转发给 Laravel
+    - **应对**：调 API 必须用浏览器环境（本地 http.server + 页面内 fetch，见 #14）；curl 只能测无鉴权行为（如 302 跳登录、路由 404）
+    - **限流陷阱**：连续自动化请求后边缘会拦截该浏览器会话，所有 fetch 变 `Failed to fetch`（响应无 CORS 头），顶层导航正常 → 判别方法：页面内 `fetch(url, {mode:'no-cors'})` 返回 opaque 即网络通、是被边缘拦截；等待冷却即可恢复，**用户真机不受影响**
 
 ---
 
