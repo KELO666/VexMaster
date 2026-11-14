@@ -35,7 +35,7 @@
 
 1. 用户真机验收自动刷新节奏与流量感受（30s 间隔如需调整改 `AUTO_REFRESH_INTERVAL_MS` 一处即可）
 2. P0/P1 待排期：数据备份/恢复、我的赛程+下一场提醒
-3. Android 打包（manifest 已升 2.6/code 105）→ git commit + push
+3. ~~Android 打包~~ → ✅ 用户已完成打包（2026-11-14，v2.6/code 105），文档状态已更新
 
 ---
 
