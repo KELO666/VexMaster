@@ -145,10 +145,9 @@ cli pack status
 ```
 VEX_Schedule_Master/
 │
-├── 📄 README.md                    # 项目说明文档 (v2.0)
+├── 📄 README.md                    # 项目说明文档 (v2.6)
 ├── 📄 PROJECT_HANDOVER.md          # 本文件 - 开发者交接文档
-├── 📄 CHANGELOG.md                 # 迭代日志 (时间倒序)
-├── 📄 EXECUTION_LOG.md             # 执行日志 (操作记录)
+├── 📄 EXECUTION_LOG.md             # 执行日志 (操作记录, 即迭代日志, 时间倒序)
 ├── 📄 index.html                   # GitHub Pages 根入口 (自动跳转至 VexMaster/)
 │
 ├── 📁 VEX_Master_Android/          # ===== Android 原生端 =====
