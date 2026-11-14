@@ -42,6 +42,39 @@
   }
 
   // ============================================================
+  // 带重试的认证请求 (v2.5)
+  // 体育馆网络抖动时自动重试一次; 5xx/429 与网络错误会重试,
+  // 401/404 等确定性错误直接返回不浪费时间
+  // ============================================================
+  const RETRY_DELAY_MS = 300;
+
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  async function authFetch(url, token, retries = 1) {
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
+        });
+        if ((response.status >= 500 || response.status === 429) && attempt < retries) {
+          await sleep(RETRY_DELAY_MS);
+          continue;
+        }
+        return response;
+      } catch (e) { // 网络错误 (TypeError: Failed to fetch 等)
+        lastErr = e;
+        if (attempt < retries) {
+          await sleep(RETRY_DELAY_MS);
+          continue;
+        }
+      }
+    }
+    throw lastErr;
+  }
+
+  // ============================================================
   // API 通信模块
   // ============================================================
 
@@ -70,13 +103,7 @@
     log(`请求 URL: ${url}`);
 
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const response = await authFetch(url, token);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -142,16 +169,10 @@
 
     try {
       do {
-        const url = `${API_BASE}/events/${eventId}/divisions/${divisionId}/matches?page=${currentPage}`;
+        const url = `${API_BASE}/events/${eventId}/divisions/${divisionId}/matches?page=${currentPage}&per_page=250`;
         log(`请求第 ${currentPage}/${lastPage} 页: ${url}`);
 
-        const response = await fetch(url, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          }
-        });
+        const response = await authFetch(url, token);
 
         if (!response.ok) {
           const errorText = await response.text();
@@ -214,16 +235,10 @@
 
     try {
       do {
-        const url = `${API_BASE}/events/${eventId}/divisions/${divisionId}/rankings?page=${currentPage}`;
+        const url = `${API_BASE}/events/${eventId}/divisions/${divisionId}/rankings?page=${currentPage}&per_page=250`;
         log(`请求第 ${currentPage}/${lastPage} 页排名: ${url}`);
 
-        const response = await fetch(url, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          }
-        });
+        const response = await authFetch(url, token);
 
         if (!response.ok) {
           const errorText = await response.text();
@@ -503,23 +518,23 @@
   }
 
   /**
-   * 拉取赛事全部队伍（自动分页），返回 { 队号: 队名 } 映射
-   * 排名接口不含队名，队名只能从这里拿
+   * 拉取赛事全部队伍信息（自动分页，单次遍历同时取队名 + 年级）
+   * v2.5: 原 fetchTeamNames / fetchTeamGrades 两次遍历合并为一次, 省一轮接口请求
+   * 排名/榜单接口不含队名，队名只能从这里拿
+   * @returns {Promise<{names: Object, grades: Object}>} { 队号: 队名 }, { 队号: grade }
    */
-  async function fetchTeamNames(eventId, token) {
+  async function fetchTeamInfo(eventId, token) {
     if (!eventId || typeof eventId !== 'number') throw new Error('EventId 参数无效');
     if (!token || typeof token !== 'string') throw new Error('Token 参数无效');
 
-    const nameMap = {};
+    const names = {};
+    const grades = {};
     let currentPage = 1;
     let lastPage = 1;
     try {
       do {
-        const url = `${API_BASE}/events/${eventId}/teams?page=${currentPage}`;
-        const response = await fetch(url, {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
-        });
+        const url = `${API_BASE}/events/${eventId}/teams?page=${currentPage}&per_page=250`;
+        const response = await authFetch(url, token);
         if (!response.ok) {
           const errorText = await response.text();
           throw new Error(`HTTP ${response.status}: ${errorText}`);
@@ -527,16 +542,18 @@
         const data = await response.json();
         if (!data || !data.data || !Array.isArray(data.data)) break;
         for (const t of data.data) {
-          if (t && t.number) nameMap[t.number] = t.team_name || t.organization || '';
+          if (!t || !t.number) continue;
+          names[t.number] = t.team_name || t.organization || '';
+          if (t.grade) grades[t.number] = t.grade;
         }
         if (data.meta && data.meta.last_page) lastPage = data.meta.last_page;
         currentPage++;
       } while (currentPage <= lastPage);
-      logSuccess(`队伍名称获取完成: ${Object.keys(nameMap).length} 队`);
-      return nameMap;
+      logSuccess(`队伍信息获取完成: ${Object.keys(names).length} 队 (含年级 ${Object.keys(grades).length} 队)`);
+      return { names, grades };
     } catch (error) {
-      logError(`队伍名称获取失败: ${error.message}`);
-      return {}; // 失败不影响主流程, 榜单队名列显示为空
+      logError(`队伍信息获取失败: ${error.message}`);
+      return { names: {}, grades: {} }; // 失败不影响主流程, 榜单队名列显示为空 / 技能赛榜仅显示"全部"
     }
   }
 
@@ -580,11 +597,8 @@
     let lastPage = 1;
     try {
       do {
-        const url = `${API_BASE}/events/${eventId}/skills?page=${currentPage}`;
-        const response = await fetch(url, {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
-        });
+        const url = `${API_BASE}/events/${eventId}/skills?page=${currentPage}&per_page=250`;
+        const response = await authFetch(url, token);
         if (!response.ok) {
           const errorText = await response.text();
           throw new Error(`HTTP ${response.status}: ${errorText}`);
@@ -649,11 +663,8 @@
     let lastPage = 1;
     try {
       do {
-        const url = `${API_BASE}/events/${eventId}/divisions/${divisionOrder}/finalistRankings?page=${currentPage}`;
-        const response = await fetch(url, {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
-        });
+        const url = `${API_BASE}/events/${eventId}/divisions/${divisionOrder}/finalistRankings?page=${currentPage}&per_page=250`;
+        const response = await authFetch(url, token);
         if (!response.ok) {
           const errorText = await response.text();
           throw new Error(`HTTP ${response.status}: ${errorText}`);
@@ -729,42 +740,6 @@
   }
 
   /**
-   * 拉取赛事队伍年级映射（自动分页）: { 队号: grade } — 技能赛榜小学/初中过滤用
-   */
-  async function fetchTeamGrades(eventId, token) {
-    if (!eventId || typeof eventId !== 'number') throw new Error('EventId 参数无效');
-    if (!token || typeof token !== 'string') throw new Error('Token 参数无效');
-    const gradeMap = {};
-    let currentPage = 1;
-    let lastPage = 1;
-    try {
-      do {
-        const url = `${API_BASE}/events/${eventId}/teams?page=${currentPage}`;
-        const response = await fetch(url, {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
-        });
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`HTTP ${response.status}: ${errorText}`);
-        }
-        const data = await response.json();
-        if (!data || !data.data || !Array.isArray(data.data)) break;
-        for (const t of data.data) {
-          if (t && t.number && t.grade) gradeMap[t.number] = t.grade;
-        }
-        if (data.meta && data.meta.last_page) lastPage = data.meta.last_page;
-        currentPage++;
-      } while (currentPage <= lastPage);
-      logSuccess(`队伍年级获取完成: ${Object.keys(gradeMap).length} 队`);
-      return gradeMap;
-    } catch (error) {
-      logError(`队伍年级获取失败: ${error.message}`);
-      return {}; // 失败不影响主流程, 技能赛榜仅显示"全部"
-    }
-  }
-
-  /**
    * 队伍年级映射合并入库（多赛事累积 merge，不清空旧数据）
    */
   function mergeTeamGradesToLocalStorage(apiGradeMap) {
@@ -816,79 +791,74 @@
   }
 
   /**
-   * 一键同步完整流程（单个 SKU，多赛区）
+   * 一键同步完整流程（单个 SKU，多赛区并行抓取）
+   *
+   * v2.5 提速: ① 赛事信息先行，其余端点(比赛/排名/决赛排名/技能赛/队伍)并行发起，
+   *    每个端点内部保持顺序分页 —— 总耗时 ≈ 最长一条链而非全部请求之和
+   * ② 队名+年级合并为一次 /teams 遍历 ③ 所有请求带一次自动重试 ④ 抓取到的全部比赛
+   *    随返回值交回调用方：赛程表由调用方合并多 SKU 数据后统一生成
+   *    (generateScheduleFromApi)，避免多赛事互相覆盖
+   *
+   * @param onProgress 可选 (done, total) => void，用于 UI 进度显示
+   * @returns {success, matches: Array(带 _divisionName 标注的原始比赛数据), matchCount, message}
    */
-  async function runFullSync(sku, token) {
+  async function runFullSync(sku, token, onProgress) {
     log('开始一键同步...');
 
     if (!sku || typeof sku !== 'string' || sku.trim() === '') {
-      return { success: false, count: 0, message: 'SKU 参数无效' };
+      return { success: false, matches: [], matchCount: 0, message: 'SKU 参数无效' };
     }
     if (!token || typeof token !== 'string' || token.trim() === '') {
-      return { success: false, count: 0, message: 'Token 参数无效' };
+      return { success: false, matches: [], matchCount: 0, message: 'Token 参数无效' };
     }
 
     try {
-      // 1. 获取赛事信息（含赛区列表）
-      log('步骤 1/4: 获取赛事信息...');
+      // 1. 获取赛事信息（含赛区列表），其余请求依赖它才能发起
       const eventInfo = await fetchEventId(sku, token);
-      log(`赛事: ${eventInfo.name}, ${eventInfo.divisions.length} 个赛区`);
+      log(`赛事: ${eventInfo.name}, ${eventInfo.divisions.length} 个赛区, 并行抓取中...`);
 
-      // 1.5 抓取全赛事队名映射（榜单名称列数据源，失败不影响主流程）
-      try {
-        mergeTeamNamesToLocalStorage(await fetchTeamNames(eventInfo.id, token));
-      } catch (e) { logError('队名抓取失败:', e.message); }
+      // 2. 并行发起全部请求（每端点内部保持顺序分页；除比赛外均失败兜底返回空，不影响主流程）
+      const total = eventInfo.divisions.length * 3 + 2;
+      let done = 0;
+      const tick = () => { done++; if (typeof onProgress === 'function') onProgress(done, total); };
 
-      // 1.6 抓取队伍年级映射（技能赛榜小学/初中过滤用，失败不影响主流程）
-      try {
-        mergeTeamGradesToLocalStorage(await fetchTeamGrades(eventInfo.id, token));
-      } catch (e) { logError('年级抓取失败:', e.message); }
+      const teamsP = fetchTeamInfo(eventInfo.id, token).then(x => { tick(); return x; });
+      const skillsP = fetchSkills(eventInfo.id, token).then(x => { tick(); return x; });
+      const chains = eventInfo.divisions.map(div => ({
+        div,
+        matchesP: fetchMatchesData(eventInfo.id, div.id, token).then(x => { tick(); return x; }),
+        rankingsP: fetchRankings(eventInfo.id, div.id, token).then(x => { tick(); return x; }),
+        finalistP: fetchFinalistRankings(eventInfo.id, div.order || div.id, token).then(x => { tick(); return x; })
+      }));
 
-      // 1.7 抓取技能赛数据（赛事级接口，每赛事一次，失败不影响主流程）
-      try {
-        mergeSkillsToLocalStorage(await fetchSkills(eventInfo.id, token));
-      } catch (e) { logError('技能赛抓取失败:', e.message); }
+      // 3. 等全部请求落地（比赛失败会在这里抛出，其余端点内部已兜底为空）
+      const [teamsInfo, skills, ...chainResults] = await Promise.all([
+        teamsP,
+        skillsP,
+        ...chains.map(c => Promise.all([c.matchesP, c.rankingsP, c.finalistP])
+          .then(([matches, rankings, finalist]) => ({ div: c.div, matches, rankings, finalist })))
+      ]);
 
-      let allMatches = [];
+      // 4. 按旧版顺序合并（队名在前 — 决赛榜单名称列依赖它；赛区按列表顺序仲裁）
+      mergeTeamNamesToLocalStorage(teamsInfo.names);
+      mergeTeamGradesToLocalStorage(teamsInfo.grades);
+      mergeSkillsToLocalStorage(skills);
 
-      // 2. 遍历每个赛区
-      for (const div of eventInfo.divisions) {
-        log(`拉取赛区: ${div.name} (ID: ${div.id})...`);
-        const matches = await fetchMatchesData(eventInfo.id, div.id, token);
-
-        // 在每场比赛上标注极简赛区名称
-        matches.forEach(m => { m._divisionName = formatDivisionName(eventInfo.name, div.name); });
-
-        allMatches = allMatches.concat(matches);
-
-        // 3. 同步该赛区的排名（同时存整分区官方榜单）
-        try {
-          const rankings = await fetchRankings(eventInfo.id, div.id, token);
-          mergeRankingsToLocalStorage(rankings, formatDivisionName(eventInfo.name, div.name));
-        } catch (e) {
-          logError(`赛区 ${div.name} 排名获取失败:`, e.message);
-        }
-
-        // 3.5 同步该赛区的决赛排名（路径用赛区 order；未开决赛时接口可能为空/404，不影响主流程）
-        try {
-          const divOrder = div.order || div.id;
-          const finalistRankings = await fetchFinalistRankings(eventInfo.id, divOrder, token);
-          mergeFinalistRankingsToLocalStorage(finalistRankings, formatDivisionName(eventInfo.name, div.name));
-        } catch (e) {
-          logError(`赛区 ${div.name} 决赛排名获取失败:`, e.message);
-        }
+      const allMatches = [];
+      for (const res of chainResults) {
+        const divLabel = formatDivisionName(eventInfo.name, res.div.name);
+        mergeRankingsToLocalStorage(res.rankings, divLabel);
+        mergeFinalistRankingsToLocalStorage(res.finalist, divLabel);
+        res.matches.forEach(m => { m._divisionName = divLabel; });
+        allMatches.push(...res.matches);
       }
 
-      // 4. 同步比分
-      log('同步比分到本地...');
-      const count = syncScoresToLocal(allMatches);
-
-      const msg = `同步成功，共 ${eventInfo.divisions.length} 个赛区，更新了 ${count} 条比分记录`;
+      const msg = `同步成功：${eventInfo.divisions.length} 个赛区，共 ${allMatches.length} 场比赛`;
       logSuccess(msg);
-      return { success: true, count, message: msg };
+      return { success: true, matches: allMatches, matchCount: allMatches.length, message: msg };
 
     } catch (error) {
-      return { success: false, count: 0, message: `同步失败: ${error.message}` };
+      return { success: false, matches: [], matchCount: 0, message: `同步失败: ${error.message}` };
     }
   }
 
@@ -962,9 +932,8 @@
     fetchEventId,
     fetchMatchesData,
     fetchRankings,
-    fetchTeamNames,
+    fetchTeamInfo,
     mergeTeamNamesToLocalStorage,
-    fetchTeamGrades,
     mergeTeamGradesToLocalStorage,
     fetchSkills,
     mergeSkillsToLocalStorage,
@@ -977,19 +946,19 @@
     formatDivisionName
   };
 
-  log('API 通信模块已加载 (多赛区 + 排名 + 决赛 + 技能赛版)');
+  log('API 通信模块已加载 (v2.5 并行同步版: 多赛区+排名+决赛+技能赛)');
   log('可用函数:');
   log('  - VexApiSync.fetchEventId(sku, token)        -> { id, name, divisions }');
   log('  - VexApiSync.fetchMatchesData(eventId, divId, token)');
   log('  - VexApiSync.fetchRankings(eventId, divId, token)');
   log('  - VexApiSync.fetchFinalistRankings(eventId, divOrder, token)');
   log('  - VexApiSync.fetchSkills(eventId, token)');
-  log('  - VexApiSync.fetchTeamNames(eventId, token) / fetchTeamGrades(eventId, token)');
+  log('  - VexApiSync.fetchTeamInfo(eventId, token)   -> { names, grades }');
   log('  - VexApiSync.syncScoresToLocal(apiMatchesData)');
   log('  - VexApiSync.mergeRankingsToLocalStorage(apiRankingsData, divisionName)');
   log('  - VexApiSync.mergeFinalistRankingsToLocalStorage(apiData, divisionName)');
   log('  - VexApiSync.mergeSkillsToLocalStorage(apiSkillsData)');
-  log('  - VexApiSync.runFullSync(sku, token)');
+  log('  - VexApiSync.runFullSync(sku, token, onProgress) -> { success, matches, matchCount, message }');
   log('  - VexApiSync.generateScheduleFromApi(apiMatchesData)');
 
 })();

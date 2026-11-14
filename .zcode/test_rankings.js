@@ -202,6 +202,7 @@ async function testFullSync(label, loader, rankingsKey, scoreKey) {
   const mod = loader(env);
   const result = await mod.runFullSync('RE-VIX-26-TEST', 'tok');
   check('runFullSync 返回 success', result.success === true, result.message);
+  check('runFullSync 返回全部比赛数据 (2 赛区各 1 场, 带 _divisionName)', Array.isArray(result.matches) && result.matches.length === 2 && result.matches.every(m => m._divisionName), `实际 ${result.matches && result.matches.length}`);
 
   const rankingReqs = env.requests.filter(u => u.includes('/rankings'));
   check('排名请求共 4 次 (2 赛区 × 2 页)', rankingReqs.length === 4, `实际 ${rankingReqs.length}`);
@@ -214,6 +215,15 @@ async function testFullSync(label, loader, rankingsKey, scoreKey) {
   check('R3 = 3 (赛区 1 第 2 页)', db['R3'] === 3, `实际 ${db['R3']}`);
   check('R4 = 4 (赛区 1 第 2 页)', db['R4'] === 4, `实际 ${db['R4']}`);
   check('R5 = 1 (来自 Final)', db['R5'] === 1, `实际 ${db['R5']}`);
+
+  // v2.5: 赛程表由调用方统一生成 (runFullSync 只返回数据不再直接写赛程)
+  const matchCount = mod.generateScheduleFromApi(result.matches);
+  const scoreCount = mod.syncScoresToLocal(result.matches);
+  check('generateScheduleFromApi 生成 2 场', matchCount === 2, `实际 ${matchCount}`);
+  const matchesKey = rankingsKey.replace('rankings', 'matches');
+  const storedMatches = JSON.parse(env.localStorage._store[matchesKey]);
+  check('赛程含 Q1 (资格赛区) 与 F1 (Final 赛区按名称判定)', storedMatches.some(m => m.matchId === 'Q1') && storedMatches.some(m => m.matchId === 'F1'), JSON.stringify(storedMatches.map(m => m.matchId)));
+  check('比分合并 4 条 (两场 × 各 2 队)', scoreCount === 4, `实际 ${scoreCount}`);
 
   check(`比分写入 ${scoreKey}`, env.localStorage._store[scoreKey] !== undefined);
   const scores = JSON.parse(env.localStorage._store[scoreKey]);
@@ -330,9 +340,11 @@ function testFinalsIdsMultiDiv(label, loader, scoreKey, matchesKey) {
 
   (async () => {
     const mod = loader(env);
-    // 阶段 1: 云端同步比分 (runFullSync 路径, 各赛区 matches 已带 division 对象)
+    // 阶段 1: 云端同步 (runFullSync 路径, 各赛区 matches 已带 division 对象; v2.5 赛程由调用方生成)
     const result = await mod.runFullSync('RE-VIX-26-TEST', 'tok');
     check('runFullSync 成功 (3 赛区)', result.success === true, result.message);
+    check('runFullSync 返回 5 场比赛数据', Array.isArray(result.matches) && result.matches.length === 5, `实际 ${result.matches && result.matches.length}`);
+    mod.generateScheduleFromApi(result.matches);
     let scores = JSON.parse(env.localStorage._store[scoreKey]);
     check('赛区 1 资格赛 Q1_T1 = 50', scores['Q1_T1'] === '50', `实际 ${scores['Q1_T1']}`);
     check('赛区 1 决赛 → F1-1_T1 = 60', scores['F1-1_T1'] === '60', `实际 ${scores['F1-1_T1']}`);
@@ -427,27 +439,81 @@ function testFinalistRankings(label, loader, rankKey, detailKey) {
   check('赛区决赛榜: F1 第 1 + score=300', detail['初中组 1区'] && detail['初中组 1区'][0].team === 'F1' && detail['初中组 1区'][0].score === 300);
 }
 
-// ---------- 测试 11: fetchTeamGrades 分页 + 年级合并 (v2.4) ----------
-async function testTeamGrades(label, loader, gradesKey) {
-  console.log(`\n[${label}] 测试 11: fetchTeamGrades 自动分页 + 年级合并`);
+// ---------- 测试 11: fetchTeamInfo 单次遍历同时取队名+年级 (v2.5 合并) ----------
+async function testTeamInfo(label, loader, namesKey, gradesKey) {
+  console.log(`\n[${label}] 测试 11: fetchTeamInfo 自动分页 (队名+年级一次遍历)`);
   const env = makeEnv();
   makeFetchServer(env, (url) => {
     const page = Number(new URL(url).searchParams.get('page') || 1);
     const pages = {
-      1: { data: [ { number: 'T1', grade: 'Middle School' }, { number: 'T2', grade: 'Elementary School' } ], meta: { last_page: 2 } },
-      2: { data: [ { number: 'T3', grade: 'High School' } ], meta: { last_page: 2 } }
+      1: { data: [ { number: 'T1', team_name: 'Team One', grade: 'Middle School' }, { number: 'T2', team_name: 'Team Two', grade: 'Elementary School' } ], meta: { last_page: 2 } },
+      2: { data: [ { number: 'T3', team_name: 'Team Three', grade: 'High School' } ], meta: { last_page: 2 } }
     };
     return { body: pages[page] || { data: [], meta: { last_page: 2 } } };
   });
   const mod = loader(env);
-  const out = await mod.fetchTeamGrades(42, 'tok');
-  check('年级发起 2 次请求 (逐页)', env.requests.length === 2, `实际 ${env.requests.length}`);
-  check('3 队年级全部取回 (第 2 页未丢失)', Object.keys(out).length === 3, `实际 ${Object.keys(out).length}`);
-  mod.mergeTeamGradesToLocalStorage(out);
+  const out = await mod.fetchTeamInfo(42, 'tok');
+  check('发起 2 次请求 (单次遍历, 省一轮接口)', env.requests.length === 2, `实际 ${env.requests.length}`);
+  check('队名 3 队 (第 2 页未丢失)', Object.keys(out.names).length === 3, `实际 ${Object.keys(out.names).length}`);
+  check('年级 3 队 (同一次遍历获得)', Object.keys(out.grades).length === 3, `实际 ${Object.keys(out.grades).length}`);
+  mod.mergeTeamNamesToLocalStorage(out.names);
+  mod.mergeTeamGradesToLocalStorage(out.grades);
   const db = JSON.parse(env.localStorage._store[gradesKey]);
   check('T1 = Middle School', db['T1'] === 'Middle School');
   check('T2 = Elementary School', db['T2'] === 'Elementary School');
   check('T3 = High School', db['T3'] === 'High School');
+  const nameDb = JSON.parse(env.localStorage._store[namesKey]);
+  check('队名库: T1 = Team One', nameDb['T1'] === 'Team One');
+}
+
+// ---------- 测试 12: 网络抖动/5xx 自动重试 (v2.5) ----------
+function skillOkResponse() {
+  const body = { data: [ { type: 'driver', attempts: 1, score: 100, rank: 1, team: { id: 1, name: 'T1' } } ], meta: { last_page: 1 } };
+  return { ok: true, status: 200, text: async () => JSON.stringify(body), json: async () => body };
+}
+
+async function testRetry(label, loader, skillsKey) {
+  console.log(`\n[${label}] 测试 12: 网络抖动/5xx 自动重试一次, 404 不重试`);
+  // 场景 A: 首次网络错误 → 重试成功
+  const envA = makeEnv();
+  let a = 0;
+  envA.fetch = async () => {
+    a++;
+    if (a === 1) throw new TypeError('Failed to fetch');
+    return skillOkResponse();
+  };
+  const modA = loader(envA);
+  const outA = await modA.fetchSkills(42, 'tok');
+  check('网络错误后自动重试 (共 2 次请求)', a === 2, `实际 ${a}`);
+  check('重试后数据完整取回', outA.length === 1 && outA[0].score === 100);
+  modA.mergeSkillsToLocalStorage(outA);
+  const dbA = JSON.parse(envA.localStorage._store[skillsKey]);
+  check('重试场景数据正常入库', !!dbA['T1'] && dbA['T1'].total === 100);
+
+  // 场景 B: 首次 503 → 重试成功
+  const envB = makeEnv();
+  let b = 0;
+  envB.fetch = async () => {
+    b++;
+    if (b === 1) return { ok: false, status: 503, text: async () => 'Service Unavailable', json: async () => ({}) };
+    return skillOkResponse();
+  };
+  const modB = loader(envB);
+  const outB = await modB.fetchSkills(42, 'tok');
+  check('5xx 后自动重试 (共 2 次请求)', b === 2, `实际 ${b}`);
+  check('503 重试后数据完整', outB.length === 1 && outB[0].score === 100);
+
+  // 场景 C: 404 是确定性错误, 不浪费重试
+  const envC = makeEnv();
+  let c = 0;
+  envC.fetch = async () => {
+    c++;
+    return { ok: false, status: 404, text: async () => 'Not Found', json: async () => ({}) };
+  };
+  const modC = loader(envC);
+  const outC = await modC.fetchSkills(42, 'tok');
+  check('404 不重试 (仅 1 次请求)', c === 1, `实际 ${c}`);
+  check('404 兜底返回空数组不影响主流程', Array.isArray(outC) && outC.length === 0);
 }
 
 // ---------- 被测对象 ----------
@@ -539,7 +605,8 @@ function testOfficialStandings(label, loader, key) {
     await testFinalsIdsMultiDiv(t.label, t.load, t.key.replace('rankings', 'scores'), t.key.replace('rankings', 'matches'));
     await testSkills(t.label, t.load, t.key.replace('rankings', 'skills'));
     testFinalistRankings(t.label, t.load, t.key.replace('rankings', 'finalist_rankings'), t.key.replace('rankings', 'finalist_detail'));
-    await testTeamGrades(t.label, t.load, t.key.replace('rankings', 'team_grades'));
+    await testTeamInfo(t.label, t.load, t.key.replace('rankings', 'team_names'), t.key.replace('rankings', 'team_grades'));
+    await testRetry(t.label, t.load, t.key.replace('rankings', 'skills'));
   }
   console.log(`\n========== 结果: ${passed} 通过, ${failed} 失败 ==========`);
   process.exit(failed > 0 ? 1 : 0);

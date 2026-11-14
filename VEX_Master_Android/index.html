@@ -13,6 +13,21 @@
         body { font-family: -apple-system, sans-serif; margin: 0; padding: 0; background-color: var(--bg); color: var(--text); padding-bottom: 70px; }
         
         .header { background: var(--card-bg); text-align: center; font-size: 17px; font-weight: 800; padding: 16px 0; position: sticky; top: 0; z-index: 100; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+
+        /* 自动刷新状态条 (v2.6): 跟随吸顶头部之下, 数据页常驻可见 */
+        .refresh-strip {
+            position: sticky; top: 56px; z-index: 99;
+            background: var(--card-bg); border-bottom: 1px solid #eef0f3;
+            display: flex; align-items: center; gap: 8px; padding: 5px 12px;
+            font-size: 11px; color: #64748b; box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+        }
+        .refresh-strip button {
+            border: none; background: #eef2f7; color: #475569; padding: 2px 9px;
+            border-radius: 10px; font-size: 11px; font-weight: bold; cursor: pointer; flex-shrink: 0;
+        }
+        .refresh-strip button.on { background: #dcfce7; color: #15803d; }
+        .refresh-strip button.off { background: #fee2e2; color: #b91c1c; }
+        .refresh-strip .fail { color: #d97706; font-weight: bold; }
         .page { display: none; padding: 12px; animation: fadeIn 0.2s; }
         .page.active { display: block; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
@@ -114,6 +129,10 @@
 <body>
 
     <div class="header" id="header-title">数据导入</div>
+    <div class="refresh-strip" id="refresh-strip">
+        <button type="button" id="auto-refresh-toggle" onclick="window.toggleAutoRefresh()">自动刷新 开</button>
+        <span id="refresh-status-text">未同步过</span>
+    </div>
 
     <div id="page-import" class="page active">
         <div class="card">
@@ -145,15 +164,10 @@
                     style="background:#f0f9ff; color:#0284c7; border:1px dashed #0284c7; padding:8px 12px; border-radius:8px; font-size:13px; font-weight:bold; cursor:pointer; width:100%; margin-top:4px;">
                 + 添加赛事 SKU
             </button>
-            <button id="sync-cloud-btn" class="btn-primary" 
+            <button id="sync-cloud-btn" class="btn-primary"
                     style="background: #3b82f6; width: 100%; margin-top: 8px;"
                     onclick="window.syncCloudScores()">
-                🔄 云端同步比分
-            </button>
-            <button id="pull-schedule-btn" class="btn-primary" 
-                    style="background: #8b5cf6; width: 100%; margin-top: 8px;"
-                    onclick="window.pullFullSchedule()">
-                🌐 一键拉取完整赛程 (无 PDF 时使用)
+                🔄 云端同步 (赛程/比分/排名/技能赛)
             </button>
             <div id="sync-status-msg" style="text-align:center; font-size:12px; color:#888; margin-top:8px; display:none;"></div>
         </div>
@@ -277,6 +291,17 @@
         let currentRankMode = 'quals'; // 排行榜数据源: 'quals'=资格赛 | 'finals'=决赛
         let currentSkillFilter = 'All'; // 技能赛榜年级过滤: 'All' | 'ES' | 'MS'
 
+        // 自动刷新 (v2.6): 数据页停留时每 30s 静默同步一次, 切后台暂停, 回前台过期即补
+        const AUTO_REFRESH_INTERVAL_MS = 30000;
+        const AUTO_REFRESH_PAGES = ['single', 'master', 'skills'];
+        let autoRefreshEnabled = (localStorage.getItem('vex_auto_refresh') ?? '1') === '1';
+        let lastSyncTime = null;   // 最后一次成功同步时间
+        let lastSyncFailed = false;
+        let syncingNow = false;
+        let currentPageId = 'import';
+        let nextAutoRefreshAt = 0;
+        let stripOverlayText = null;
+
         document.addEventListener('DOMContentLoaded', function() {
             const countEl = document.getElementById('total-matches-count');
             if (countEl) countEl.innerText = globalMatches ? globalMatches.length : 0;
@@ -291,6 +316,16 @@
             window.loadApiConfig();
             window.renderLeaderboard();
             window.renderSkillsBoard();
+            // 自动刷新引擎 (v2.6): 5s 检查一次节拍 / 1s 刷新倒计时 / 回前台过期即补
+            renderRefreshStrip();
+            setInterval(autoRefreshTick, 5000);
+            setInterval(renderRefreshStrip, 1000);
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden && autoRefreshEnabled) {
+                    if (Date.now() >= nextAutoRefreshAt - 5000) nextAutoRefreshAt = Date.now();
+                    autoRefreshTick();
+                }
+            });
         });
 
         window.saveData = function() {
@@ -379,122 +414,154 @@
         }
 
         /**
-         * 云端同步比分按钮点击事件
+         * 云端同步管线 (v2.6 重构): 手动按钮与自动刷新共用
+         * 一次同步 = 赛程 + 比分 + 排名 + 决赛排名 + 技能赛 + 队名年级 全量刷新
+         * 多 SKU 数据先聚合再统一生成赛程；关注队伍列表不被清空
+         * @param opts.silent true=自动刷新模式 (不弹窗、不动按钮)
          */
-        window.syncCloudScores = async function() {
-            const btn = document.getElementById('sync-cloud-btn');
+        async function runCloudSync(opts = {}) {
+            const silent = !!opts.silent;
             const statusMsg = document.getElementById('sync-status-msg');
-            const originalText = btn.innerText;
+            const btn = document.getElementById('sync-cloud-btn');
             const token = document.getElementById('api-token-input').value.trim();
             const skuList = window.getSkuList();
-            if (skuList.length === 0) { alert('请先填写赛事 SKU'); return; }
-            if (!token) { alert('请先填写 API Token'); return; }
-            btn.innerText = '同步中...';
-            btn.disabled = true;
-            statusMsg.style.display = 'block';
-            statusMsg.style.color = '#f59e0b';
-            let totalUpdated = 0;
-            let errorMessages = [];
-            for (let i = 0; i < skuList.length; i++) {
-                const sku = skuList[i];
-                statusMsg.innerText = skuList.length > 1 ? `同步中 (${i + 1}/${skuList.length}): ${sku}...` : '正在连接云端...';
-                try {
-                    const result = await VexApiSync.runFullSync(sku, token);
-                    if (result.success) { totalUpdated += result.count; } else { errorMessages.push(`${sku}: ${result.message}`); }
-                } catch (error) { errorMessages.push(`${sku}: ${error.message}`); }
+            if (skuList.length === 0 || !token) {
+                return { ok: false, errors: [!token ? '未填写 API Token' : '未填写赛事 SKU'] };
             }
-            const savedScores = localStorage.getItem('vex_scores');
-            scoresDb = savedScores ? JSON.parse(savedScores) : {};
-            const savedDone = localStorage.getItem('vex_done');
-            doneDb = savedDone ? JSON.parse(savedDone) : {};
-            const savedRankings = localStorage.getItem('vex_rankings');
-            rankingsDb = savedRankings ? JSON.parse(savedRankings) : {};
-            const savedRankingsDetail = localStorage.getItem('vex_rankings_detail');
-            rankingsDetailDb = savedRankingsDetail ? JSON.parse(savedRankingsDetail) : {};
-            skillsDb = JSON.parse(localStorage.getItem('vex_skills')) || {};
-            finalistRankDb = JSON.parse(localStorage.getItem('vex_finalist_rankings')) || {};
-            finalistDetailDb = JSON.parse(localStorage.getItem('vex_finalist_detail')) || {};
-            teamGradeDb = JSON.parse(localStorage.getItem('vex_team_grades')) || {};
-            window.saveData(); window.updateTeamUI(); window.updateDivisionFilterUI();
-            if (window.renderLeaderboard) window.renderLeaderboard();
-            if (window.renderSingleTeam) window.renderSingleTeam();
-            if (window.renderSkillsBoard) window.renderSkillsBoard();
-            let msg = `同步完成，共更新 ${totalUpdated} 条比分记录`;
-            if (errorMessages.length > 0) msg += `\n\n失败项:\n${errorMessages.join('\n')}`;
-            statusMsg.innerText = `同步完成，共更新 ${totalUpdated} 条比分记录`;
-            statusMsg.style.color = errorMessages.length > 0 ? '#f59e0b' : '#10b981';
-            alert(msg);
-            btn.innerText = originalText; btn.disabled = false;
+            if (syncingNow) return { ok: false, errors: ['同步进行中'] };
+            syncingNow = true;
+            if (!silent) {
+                btn.innerText = '同步中...';
+                btn.disabled = true;
+                statusMsg.style.display = 'block';
+                statusMsg.style.color = '#f59e0b';
+            }
+            renderRefreshStrip('同步中...');
+            let collected = [];
+            let errorMessages = [];
+            try {
+                for (let i = 0; i < skuList.length; i++) {
+                    const sku = skuList[i];
+                    try {
+                        const result = await VexApiSync.runFullSync(sku, token, (done, total) => {
+                            const text = `${skuList.length > 1 ? `(${i + 1}/${skuList.length}) ` : ''}并行拉取中 ${done}/${total}`;
+                            if (!silent) statusMsg.innerText = text;
+                            renderRefreshStrip(text);
+                        });
+                        if (result.success) { collected.push(...result.matches); } else { errorMessages.push(`${sku}: ${result.message}`); }
+                    } catch (error) { errorMessages.push(`${sku}: ${error.message}`); }
+                }
+                if (collected.length === 0) {
+                    lastSyncFailed = true;
+                    const msg = errorMessages.length > 0 ? `所有赛事同步失败:\n${errorMessages.join('\n')}` : '未获取到任何比赛数据';
+                    if (!silent) {
+                        statusMsg.innerText = msg; statusMsg.style.color = '#ef4444'; alert(msg);
+                    }
+                    return { ok: false, errors: errorMessages };
+                }
+                if (!silent) statusMsg.innerText = `正在生成赛程与比分 (${collected.length} 场)...`;
+                const matchCount = VexApiSync.generateScheduleFromApi(collected);
+                const scoreCount = VexApiSync.syncScoresToLocal(collected);
+                // 重新读取内存状态并渲染 (含重建后的赛程)
+                const savedMatches = localStorage.getItem('vex_matches');
+                if (savedMatches) globalMatches = JSON.parse(savedMatches);
+                const savedScores = localStorage.getItem('vex_scores');
+                scoresDb = savedScores ? JSON.parse(savedScores) : {};
+                const savedDone = localStorage.getItem('vex_done');
+                doneDb = savedDone ? JSON.parse(savedDone) : {};
+                const savedRankings = localStorage.getItem('vex_rankings');
+                rankingsDb = savedRankings ? JSON.parse(savedRankings) : {};
+                const savedRankingsDetail = localStorage.getItem('vex_rankings_detail');
+                rankingsDetailDb = savedRankingsDetail ? JSON.parse(savedRankingsDetail) : {};
+                skillsDb = JSON.parse(localStorage.getItem('vex_skills')) || {};
+                finalistRankDb = JSON.parse(localStorage.getItem('vex_finalist_rankings')) || {};
+                finalistDetailDb = JSON.parse(localStorage.getItem('vex_finalist_detail')) || {};
+                teamGradeDb = JSON.parse(localStorage.getItem('vex_team_grades')) || {};
+                const countEl = document.getElementById('total-matches-count');
+                if (countEl) countEl.innerText = globalMatches.length;
+                window.saveData(); window.updateTeamUI(); window.updateDivisionFilterUI();
+                if (window.renderLeaderboard) window.renderLeaderboard();
+                if (window.renderSingleTeam) window.renderSingleTeam();
+                if (window.renderSkillsBoard) window.renderSkillsBoard();
+                const msg = `同步完成：赛程 ${matchCount} 场 · 比分 ${scoreCount} 条`;
+                if (!silent) {
+                    statusMsg.innerText = msg;
+                    statusMsg.style.color = errorMessages.length > 0 ? '#f59e0b' : '#10b981';
+                    let fullMsg = msg;
+                    if (errorMessages.length > 0) fullMsg += `\n\n失败项:\n${errorMessages.join('\n')}`;
+                    alert(fullMsg);
+                }
+                lastSyncTime = new Date();
+                lastSyncFailed = false;
+                return { ok: true, matchCount, scoreCount, errors: errorMessages };
+            } finally {
+                syncingNow = false;
+                stripOverlayText = null;
+                if (!silent && btn) {
+                    btn.innerText = '🔄 云端同步 (赛程/比分/排名/技能赛)';
+                    btn.disabled = false;
+                }
+                renderRefreshStrip();
+            }
+        }
+
+        // ============ 自动刷新状态条与定时引擎 (v2.6) ============
+        function renderRefreshStrip(overlay) {
+            if (overlay !== undefined) stripOverlayText = overlay;
+            const btn = document.getElementById('auto-refresh-toggle');
+            const textEl = document.getElementById('refresh-status-text');
+            if (!btn || !textEl) return;
+            btn.innerText = '自动刷新 ' + (autoRefreshEnabled ? '开' : '关');
+            btn.className = autoRefreshEnabled ? 'on' : 'off';
+            let html;
+            if (stripOverlayText) {
+                html = stripOverlayText;
+            } else if (lastSyncTime) {
+                const t = lastSyncTime;
+                const hh = String(t.getHours()).padStart(2, '0');
+                const mm = String(t.getMinutes()).padStart(2, '0');
+                const ss = String(t.getSeconds()).padStart(2, '0');
+                html = '上次更新 ' + hh + ':' + mm + ':' + ss;
+                if (lastSyncFailed) html += ' · <span class="fail">⚠️ 上次同步失败, 当前为缓存数据</span>';
+                if (autoRefreshEnabled && AUTO_REFRESH_PAGES.indexOf(currentPageId) !== -1) {
+                    const remain = Math.max(0, Math.ceil((nextAutoRefreshAt - Date.now()) / 1000));
+                    html += ' · ' + remain + 's 后自动刷新';
+                }
+            } else {
+                html = autoRefreshEnabled ? '待首次同步' : '自动刷新已关闭';
+            }
+            textEl.innerHTML = html;
+        }
+
+        window.toggleAutoRefresh = function() {
+            autoRefreshEnabled = !autoRefreshEnabled;
+            localStorage.setItem('vex_auto_refresh', autoRefreshEnabled ? '1' : '0');
+            if (autoRefreshEnabled) {
+                nextAutoRefreshAt = Date.now(); // 打开后立即补一次
+                autoRefreshTick();
+            }
+            renderRefreshStrip();
+        }
+
+        async function autoRefreshTick() {
+            if (!autoRefreshEnabled || syncingNow || document.hidden) return;
+            if (AUTO_REFRESH_PAGES.indexOf(currentPageId) === -1) return; // 导入配置页不自动跑
+            if (Date.now() < nextAutoRefreshAt) return;
+            nextAutoRefreshAt = Date.now() + AUTO_REFRESH_INTERVAL_MS;
+            const token = document.getElementById('api-token-input').value.trim();
+            const skuList = window.getSkuList();
+            if (!token || skuList.length === 0) return;
+            const r = await runCloudSync({ silent: true });
+            if (r.ok) { lastSyncTime = new Date(); lastSyncFailed = false; }
+            else { lastSyncFailed = true; }
+            renderRefreshStrip();
         }
 
         /**
-         * 一键拉取完整赛程按钮点击事件
+         * 云端同步按钮点击事件（手动）
          */
-        window.pullFullSchedule = async function() {
-            const btn = document.getElementById('pull-schedule-btn');
-            const statusMsg = document.getElementById('sync-status-msg');
-            const originalText = btn.innerText;
-            const token = document.getElementById('api-token-input').value.trim();
-            const skuList = window.getSkuList();
-            if (skuList.length === 0) { alert('请先填写赛事 SKU'); return; }
-            if (!token) { alert('请先填写 API Token'); return; }
-            btn.innerText = '拉取中...'; btn.disabled = true;
-            statusMsg.style.display = 'block'; statusMsg.style.color = '#f59e0b';
-            let allMatchesData = []; let errorMessages = [];
-            for (let i = 0; i < skuList.length; i++) {
-                const sku = skuList[i];
-                try {
-                    statusMsg.innerText = `(${i + 1}/${skuList.length}) 获取赛事信息: ${sku}...`;
-                    const eventInfo = await VexApiSync.fetchEventId(sku, token);
-                    try { VexApiSync.mergeTeamNamesToLocalStorage(await VexApiSync.fetchTeamNames(eventInfo.id, token)); } catch (e) { console.error('[PullSchedule] 队名抓取失败:', e.message); }
-                    try { VexApiSync.mergeTeamGradesToLocalStorage(await VexApiSync.fetchTeamGrades(eventInfo.id, token)); } catch (e) { console.error('[PullSchedule] 年级抓取失败:', e.message); }
-                    try { VexApiSync.mergeSkillsToLocalStorage(await VexApiSync.fetchSkills(eventInfo.id, token)); } catch (e) { console.error('[PullSchedule] 技能赛抓取失败:', e.message); }
-                    for (const div of eventInfo.divisions) {
-                        statusMsg.innerText = `(${i + 1}/${skuList.length}) ${div.name} 赛程数据...`;
-                        const matches = await VexApiSync.fetchMatchesData(eventInfo.id, div.id, token);
-                        const divLabel = window.VexApiSync.formatDivisionName(eventInfo.name, div.name);
-                        matches.forEach(m => { m._divisionName = divLabel; });
-                        allMatchesData = allMatchesData.concat(matches);
-                        try { const rankings = await VexApiSync.fetchRankings(eventInfo.id, div.id, token); VexApiSync.mergeRankingsToLocalStorage(rankings, divLabel); } catch (e) { console.error('[PullSchedule] 排名获取失败:', e.message); }
-                        // 决赛排名 (路径用赛区 order; 未开决赛时为空)
-                        try { const fr = await VexApiSync.fetchFinalistRankings(eventInfo.id, div.order || div.id, token); VexApiSync.mergeFinalistRankingsToLocalStorage(fr, divLabel); } catch (e) { console.error('[PullSchedule] 决赛排名获取失败:', e.message); }
-                    }
-                } catch (error) { errorMessages.push(`${sku}: ${error.message}`); console.error(`[PullSchedule] ${sku} 拉取失败:`, error.message); }
-            }
-            if (allMatchesData.length === 0) {
-                const msg = errorMessages.length > 0 ? `所有赛事拉取失败:\n${errorMessages.join('\n')}` : '未获取到任何比赛数据';
-                statusMsg.innerText = msg; statusMsg.style.color = '#ef4444'; alert(msg);
-                btn.innerText = originalText; btn.disabled = false; return;
-            }
-            statusMsg.innerText = `正在生成本地赛程 (${allMatchesData.length} 场)...`;
-            const count = VexApiSync.generateScheduleFromApi(allMatchesData);
-            const savedMatches = localStorage.getItem('vex_matches');
-            if (savedMatches) globalMatches = JSON.parse(savedMatches);
-            const savedScores = localStorage.getItem('vex_scores');
-            scoresDb = savedScores ? JSON.parse(savedScores) : {};
-            const savedDone = localStorage.getItem('vex_done');
-            doneDb = savedDone ? JSON.parse(savedDone) : {};
-            const savedRankings = localStorage.getItem('vex_rankings');
-            rankingsDb = savedRankings ? JSON.parse(savedRankings) : {};
-            const savedRankingsDetail = localStorage.getItem('vex_rankings_detail');
-            rankingsDetailDb = savedRankingsDetail ? JSON.parse(savedRankingsDetail) : {};
-            skillsDb = JSON.parse(localStorage.getItem('vex_skills')) || {};
-            finalistRankDb = JSON.parse(localStorage.getItem('vex_finalist_rankings')) || {};
-            finalistDetailDb = JSON.parse(localStorage.getItem('vex_finalist_detail')) || {};
-            teamGradeDb = JSON.parse(localStorage.getItem('vex_team_grades')) || {};
-            const countEl = document.getElementById('total-matches-count');
-            if (countEl) countEl.innerText = globalMatches.length;
-            myTeams = []; currentViewTeam = '';
-            window.saveData(); window.updateTeamUI(); window.updateDivisionFilterUI();
-            if (window.renderLeaderboard) window.renderLeaderboard();
-            if (window.renderSingleTeam) window.renderSingleTeam();
-            if (window.renderSkillsBoard) window.renderSkillsBoard();
-            let msg = `拉取成功！聚合 ${skuList.length} 个赛事，共生成 ${count} 场比赛`;
-            if (errorMessages.length > 0) msg += `\n\n失败项:\n${errorMessages.join('\n')}`;
-            statusMsg.innerText = `拉取成功，共生成 ${count} 场比赛`;
-            statusMsg.style.color = errorMessages.length > 0 ? '#f59e0b' : '#10b981';
-            alert(msg);
-            btn.innerText = originalText; btn.disabled = false;
+        window.syncCloudScores = async function() {
+            await runCloudSync({ silent: false });
         }
 
         function parseTimeToMinutes(timeStr) {
@@ -1026,7 +1093,7 @@
                 });
                 if (!html) html = '<div style="text-align:center;color:#aaa;padding:40px;">暂无决赛排名数据</div>';
             } else {
-                html = '<div style="text-align:center;color:#aaa;padding:40px;">暂无决赛排名数据<br><span style="font-size:12px;">请点「云端同步比分」拉取；决赛尚未开赛时无数据</span></div>';
+                html = '<div style="text-align:center;color:#aaa;padding:40px;">暂无决赛排名数据<br><span style="font-size:12px;">请点「云端同步」拉取；决赛尚未开赛时无数据</span></div>';
             }
             container.innerHTML = html;
         }
@@ -1047,7 +1114,7 @@
             const container = document.getElementById('skills-list');
             if (!container) return;
             if (!skillsDb || Object.keys(skillsDb).length === 0) {
-                container.innerHTML = '<div style="text-align:center;color:#aaa;padding:40px;">暂无技能赛数据<br><span style="font-size:12px;">请点「云端同步比分」或「一键拉取完整赛程」</span></div>';
+                container.innerHTML = '<div style="text-align:center;color:#aaa;padding:40px;">暂无技能赛数据<br><span style="font-size:12px;">请点「云端同步」一键刷新</span></div>';
                 return;
             }
 
@@ -1125,6 +1192,8 @@
             document.getElementById(`page-${pageId}`).classList.add('active');
             element.classList.add('active');
             document.getElementById('header-title').innerText = title;
+            currentPageId = pageId;
+            renderRefreshStrip();
         }
     </script>
 </body>
